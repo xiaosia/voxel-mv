@@ -103,6 +103,21 @@ examples/S1_相遇/                《把回忆拼好给你》第 1 段（Claude
 
 自动找的歌词（原始文件 `data/analysis/lyrics.lrc`，项目字幕源是 `data/lyrics.lrc`）：网上查到的可能是别的版本，识别出来的会有错字。写 TREATMENT 前对着歌听开头几句，不对就改 `data/lyrics.lrc`，再用 `--lrc data/lyrics.lrc` 重建项目（重建不会覆盖 `plan.json`、`shots.js`、`index.html`）；告诉用户歌词是自动找的。
 
+**没歌词时自己识别（可离线）。** 查不到就用本机 faster-whisper 听：
+
+```bash
+python -m pip install tqdm coloredlogs humanfriendly httpx2 fsspec hf-xet packaging pyyaml      # 纯 python，先装
+python -m pip install --only-binary :all: --no-deps av ctranslate2 tokenizers huggingface-hub   # 要轮子，别让它现编
+python -m pip install --no-deps faster-whisper
+python $SKILL/scripts/fetch_ct2_model.py small        # 下 CTranslate2 模型到 ./models/faster-whisper-small
+python $SKILL/scripts/asr_lyrics.py song.mp3 data/lyrics.lrc
+```
+
+- 为什么要 `--no-deps`：`onnxruntime` 会和已有 protobuf 冲突，而它只给 VAD 用；`av` 在部分平台上没有轮子会现编 Cython，直接失败。装不上就跳过，识别这条路不依赖它们。
+- `asr_lyrics.py` 用 ffmpeg 解成 16k 单声道再喂 numpy（绕开 PyAV 的 `metadata_errors` 版本差异），不开 VAD。
+- 模型目录用 `VOXEL_ASR_MODEL`，显卡用 `VOXEL_ASR_DEVICE=cuda`；`fetch_lyrics.py` 会优先用 `models/faster-whisper-<name>`。
+- **识别结果一定有错字**（歌唱 + 伴奏）。靠谱的做法：拿一两句去搜歌名确认是哪首，用真歌词换掉文字、保留识别出来的时间轴，再 `--lrc` 重建。
+
 自动分析的节拍：拍点一般很准；段落和 drop 是估计，写 TREATMENT 时用耳朵核对。速度差一倍（报告里 BPM 明显不对）就 `python $SKILL/scripts/analyze_audio.py song.mp3 --bpm 大概的值 --out 项目/data/analysis` 重分析，再用 `--timeline` 重建项目。
 
 ```bash

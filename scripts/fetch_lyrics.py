@@ -103,9 +103,25 @@ def asr():
     try: from faster_whisper import WhisperModel
     except ImportError: return None
     src = separate_vocals()
-    print(f'用 faster-whisper 识别歌词（模型 {A.model}；第一次会下载模型；CPU 上整首歌几分钟）…')
-    model = WhisperModel(A.model, device='auto', compute_type='auto')
-    segs, _ = model.transcribe(src, language=A.lang, vad_filter=True, word_timestamps=True,
+    # 模型：环境变量 > 本地 models/faster-whisper-<name> > 交给 faster-whisper 自己下
+    ref = os.environ.get('VOXEL_ASR_MODEL')
+    if not ref:
+        local = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'models', f'faster-whisper-{A.model}')
+        ref = local if os.path.isdir(local) else A.model
+    device = os.environ.get('VOXEL_ASR_DEVICE', 'cpu')
+    print(f'用 faster-whisper 识别歌词（模型 {ref}；CPU 上整首歌几分钟）…')
+    model = WhisperModel(ref, device=device, compute_type='float16' if device == 'cuda' else 'int8')
+    try: import onnxruntime  # noqa: F401
+    except ImportError: vad = False          # 没装 onnxruntime 就关掉 VAD，少一层依赖冲突
+    else: vad = True
+    # 不用 PyAV 解码：新版 PyAV 去掉了 metadata_errors，faster-whisper 会直接 TypeError
+    import tempfile, wave
+    import numpy as np
+    wav = os.path.join(tempfile.gettempdir(), 'voxel_asr_in.wav')
+    subprocess.run(['ffmpeg', '-y', '-v', 'error', '-i', src, '-ac', '1', '-ar', '16000', '-f', 'wav', wav], check=True)
+    with wave.open(wav, 'rb') as w:
+        samples = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16).astype(np.float32) / 32768.0
+    segs, _ = model.transcribe(samples, language=A.lang, vad_filter=vad, word_timestamps=True,
                                condition_on_previous_text=False,   # 不然间奏里容易一直重复上一句
                                initial_prompt='以下是简体中文歌词。' if A.lang == 'zh' else None)
     rows = []
