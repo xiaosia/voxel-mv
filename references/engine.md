@@ -3,7 +3,7 @@
 `shots.js` 开头 `import * as R from './engine/relay.js'`，最后 `R.run({ build, setupShot, overlay })`。
 
 - `build()`：开场跑一次，搭场景（可以是很多组，不同镜头显示不同的组）。
-- `setupShot(f, sf)`：每帧跑。`f` 是这一帧的全曲帧号；`sf` 是镜头帧（转场时引擎用旧镜头、新镜头各渲一次，`R.shotOf(sf)` 告诉你是哪个镜头）。在这里摆机位、灯、角色、特效。返回值可选：`{ focus, band, hblur, veilColor, veilOp, hideCaption }`（移轴清晰带高度 0 底~1 顶、带宽、横向动态模糊像素、整屏蒙色和不透明度、这帧不出字幕）。
+- `setupShot(f, sf)`：每帧跑。`f` 是这一帧的全曲帧号；`sf` 是镜头帧（转场时引擎用旧镜头、新镜头各渲一次，`R.shotOf(sf)` 告诉你是哪个镜头）。在这里摆机位、灯、角色、特效。返回值可选：`{ focus, band, hblur, veilColor, veilOp, hideCaption, grade }`（移轴清晰带高度 0 底~1 顶、带宽、横向动态模糊像素、整屏蒙色和不透明度、这帧不出字幕、叠加在段落色调上的镜头内调色，字段同 plan-format.md「grade」）。
 - `overlay(f)`：在最上层 2D 画布 `R.fxc` 上画东西（闪光、遮罩、自定义转场）。
 - 确定性：同一个 `f` 永远画同一帧。不用 `Math.random()`、`Date.now()`、跨帧累积的状态；随机用 `R.hash(n)`。
 
@@ -37,6 +37,7 @@ function setupShot(f, sf) {
 |---|---|
 | `R.look(px,py,pz, tx,ty,tz)`、`R.camera` | 摆机位；`R.camera.fov` 改焦距 |
 | `R.setSky(颜色, 雾近, 雾远, 顶色?, 顶色比例?)`、`R.keyAt(x,y,z, 颜色, 亮度)`、`R.hemi`、`R.key` | 天空、主光、环境光 |
+| `plan.json` 的 `grade`、`R.gradeAt(f)`、`R.GRADE0` | 后期调色：段落色调关键帧（见 plan-format.md「grade」）、某一帧算出来的调色参数、中性值 |
 | `R.box(父, 宽,高,深, 颜色, x,y,z, {emissive, ei, opacity, cast})` | 一个方块，(x,y,z) 是底面中心 |
 | `R.rbox(…同上, {r})` | 圆角方块（近处大件用） |
 | `R.instanced(父, 数量, 颜色, {emissive, opacity})` + `R.setInst(im, i, x,y,z, sx,sy,sz, rx,ry,rz)` | 大量方块（地砖、草、雨、粒子），改完 `im.instanceMatrix.needsUpdate = true`。**没用到的槽位要藏掉**（`setInst` 到 y=-80、缩放 0），它们默认停在原点；用过 `setColorAt` 的 InstancedMesh，没设色的槽位是黑的，会渲染成黑方块（V6 死黑） |

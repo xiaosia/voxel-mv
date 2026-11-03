@@ -78,6 +78,7 @@ python tools/run.py act                    # 动作关 + 接触图
 python tools/run.py trans                  # 转场关
 python tools/run.py voxel                  # 体素关
 python tools/run.py scenes                 # 场景关
+python tools/run.py grade                  # 调色关（色调跟着段落起伏）
 python tools/run.py draft                  # 每秒 12 帧的草稿，看整体节奏
 python tools/run.py video                  # 预检 → 分块渲染 → 检查 → 打包
 python tools/run.py video --redo C,D       # 只重渲 C、D 两个场景（也可以写 12-30）
@@ -113,6 +114,7 @@ python scripts/join_segments.py 成片.mp4 --audio 原曲.mp3 段1 段2 段3
 | 场景划分 | `plan.json` 的 `scenes` | 10–20 秒一个；快剪蒙太奇写 `why`，首尾呼应写 `same_as`。 |
 | 转场 | `plan.json` 的 `cuts` / `incamera` | 8 种引擎转场（方块雨、碎裂、体素化、横条、穿梭、拉远、两种甩镜）；`mode: 0` 可以自己画，或做拍点硬切；镜头内的大变化（天亮、全城亮灯）写 `incamera`。 |
 | 光色、天空、雾 | `shots.js` 里的 `R.setSky`、灯光和材质 | 每个场景一套光色，相邻场景至少换地点或换光色。 |
+| 每段的色调（明暗、冷暖、浓淡） | `plan.json` 的 `grade` | 引擎后期对整帧调色，角色和场景一起变，字幕不受影响；按段落写关键帧，见 [references/plan-format.md](references/plan-format.md)「grade」。 |
 | 移轴、景深、泛光、暗角 | `setupShot` 返回的 `focus`、`band`、`hblur` | `focus` 是清晰带中心的高度（0 底、1 顶），`band` 是清晰带半宽，越小景深越浅；后期参数在引擎里。 |
 | 字幕 | 项目 `index.html` 的 `#cap` | 字体、字号、颜色、描边、位置都能改；字高要 ≥ 画面高 4.5%（≥49px），任何背景上都看得清。 |
 | 歌词 | `data/lyrics.lrc`（自动找的原始文件在 `data/analysis/lyrics.lrc`） | 改完用 `new_project.py --lrc` 重新生成字幕；直接改 `assets/lyrics.json` 会在重建时被覆盖。 |
