@@ -121,7 +121,8 @@ SKILL.md / STYLE.md              目标和硬关 / 画风标准
 scripts/new_project.py           建项目：拷引擎和工具、转音频、生成节拍歌词数据（没给 timeline 就自动分析）、接入角色、写空白 plan.json 和占位 shots.js；打印歌长和段落
 scripts/song_structure.py        段落识别：歌词重复 + 人声 + 能量 + 旋律 → structure.json（前奏 / 主歌 / 导歌 / 副歌 / 间奏 / 桥段 / 尾奏 / 蓄力 / 炸点）+ structure.md；建项目时自动跑
 scripts/analyze_audio.py         节奏分析（只要 numpy + ffmpeg）：拍点、小节、重击点、段落、drop → audio.timeline.json + audio.report.md
-scripts/fetch_lyrics.py          找歌词：lrclib.net 同步歌词 → faster-whisper 识别（可选 demucs 分离人声）→ 都没有就跳过字幕
+scripts/fetch_lyrics.py          拿歌词：字从 --lyrics / lrclib.net 来（DJ 版、剪辑版也能用），时间交给 align_lyrics.py 对齐；都没有就只靠识别
+scripts/align_lyrics.py          歌词对时间：分离人声 → 按人声切片 → faster-whisper 逐字时间 → 按拼音把正确歌词对上去 → lyrics.lrc + lyrics_align.json + lyrics_check.md
 scripts/join_segments.py         分段做的几个项目拼成整支 MV（检查帧号首尾相接，无损拼接，配整首原曲）
 characters/                      角色帧动画（已带七个角色；加新角色见 characters/README.md）+ 身高校正.json + bad_frames.json
 kit/engine/relay.js              引擎（每个项目拷一份）：渲染器和灯光、方块和圆角方块、角色立牌、贴地防穿模、踩拍、动作轨、
@@ -133,6 +134,7 @@ references/engine.md             引擎速查（怎么写一个镜头、函数�
 references/plan-format.md        plan.json 每个字段
 references/relay.md              分段做：分段、交接卡、开工包、拼接
 references/common-problems.md    常见问题和修法
+references/lyrics-format.md      歌词时间轴文件格式（lyrics.lrc 的句尾行、lyrics_align.json）
 references/style/                画风参考图：01/02 两张角色合图（风格样张关拿它们对照），和帧图一致
 examples/yuai/                   《雨爱》完整源码示例、原始提示词、预览、检查报告；复现见 examples/yuai/README.md
 examples/S1_相遇/                《把回忆拼好给你》第 1 段（Claude 做）的源码、检查报告、接触表、风格样张记录
@@ -144,7 +146,7 @@ examples/S1_相遇/                《把回忆拼好给你》第 1 段（Claude
 |---|---|---|
 | 音频（wav/mp3） | 是 | 成片音轨 |
 | `audio.timeline.json` | 否 | 节拍数据（`beat_times`、`bar_times`、`hits`、`drops`、`sections`…）。没有就不用给：`new_project.py` 会自动分析音频生成它和 `audio.report.md` |
-| `lyrics.lrc` | 否 | 每句的时间；普通 LRC 和逐字 LRC 都行。没给就由 `new_project.py` 自动找：先联网查 lrclib.net，查不到再用本地 faster-whisper 听歌识别（装了才用），都不行就不做字幕、照样开工 |
+| `lyrics.lrc` | 否 | 时间已经和这个音频对好的 LRC（`--lrc`，原样用）。只有歌词文字（纯文本，或别的版本的 LRC）就用 `--lyrics`；都没有就自动找：lrclib.net 拿字，`align_lyrics.py` 对时间（要装 faster-whisper、pypinyin，装 audio-separator（RoFormer 分离人声）更准，装不上就装 demucs），再不行只靠识别，都不行就不做字幕、照样开工 |
 | `audio.report.md` | 否 | 结构、能量的文字说明；自动分析时一起生成 |
 | `structure.json` | 否 | 段落表。没有就由 `new_project.py` 自动识别；人工校对过的用 `--structure` 传进来 |
 | 角色 | 是 | `$SKILL/characters/<名字>/`，至少一个 |
@@ -155,14 +157,14 @@ examples/S1_相遇/                《把回忆拼好给你》第 1 段（Claude
 
 环境：Node.js ≥ 20、ffmpeg、Python 3（numpy、pillow）、Chrome / Edge（或 `PLAYWRIGHT_CHROME` 指向浏览器）。缺什么 `run.py doctor` 会说，并给出安装命令。
 
-自动找的歌词（原始文件 `data/analysis/lyrics.lrc`，项目字幕源是 `data/lyrics.lrc`）：网上查到的可能是别的版本，识别出来的会有错字。写 TREATMENT 前对着歌听开头几句，不对就改 `data/lyrics.lrc`，再用 `--lrc data/lyrics.lrc` 重建项目（重建不会覆盖 `plan.json`、`shots.js`、`index.html`）；告诉用户歌词是自动找的。
+**歌词关（自动拿的歌词都要过）。** 歌词的字和时间分开拿：字用最可靠的来源（用户给的歌词文字 > lrclib > 听歌识别），时间由 `align_lyrics.py` 对到这首歌（这个版本）上。写 TREATMENT 前读 `data/analysis/lyrics_check.md`：✗ 的句子时间是估的，必须核对（看 `lyrics_preview.mp4` 或 `.srt`）；`mode` 是只靠识别（没有歌词文字）时字也会错，先问用户要歌词文字（网易云 / QQ 音乐复制下来的纯文本就行），拿到后用 `--lyrics 歌词.txt` 重建。**不要凭记忆改字而不重新对齐**：字改了，时间也要跟着用 `align_lyrics.py --text` 重新对，不然字幕和唱的对不上。告诉用户歌词是自动对齐的、有几句 ✗。文件格式（给别的脚本读）见 `references/lyrics-format.md`。
 
-识别用的 whisper 模型下不动（国内网络、huggingface_hub 半路断）：`python $SKILL/scripts/fetch_ct2_model.py small`（或 `medium` / `large-v3`），走 hf-mirror、能续传，下到技能目录 `models/`，`fetch_lyrics.py` 会自动用。别处的模型目录用 `VOXEL_ASR_MODEL` 指定；设备默认 auto（有 N 卡就用），要强制用 `VOXEL_ASR_DEVICE=cpu|cuda`。
+识别用的 whisper 模型下不动（国内网络、huggingface_hub 半路断）：`python $SKILL/scripts/fetch_ct2_model.py small`（或 `medium` / `large-v3`），走 hf-mirror、能续传，下到技能目录 `models/`，`align_lyrics.py` 会自动用。别处的模型目录用 `VOXEL_ASR_MODEL` 指定；设备默认 auto（有 N 卡就用），要强制用 `VOXEL_ASR_DEVICE=cpu|cuda`。
 
 自动分析的节拍：拍点一般很准；段落和 drop 是估计，写 TREATMENT 时用耳朵核对。速度差一倍（报告里 BPM 明显不对）就 `python $SKILL/scripts/analyze_audio.py song.mp3 --bpm 大概的值 --out 项目/data/analysis` 重分析，再用 `--timeline` 重建项目。
 
 ```bash
-python $SKILL/scripts/new_project.py my_mv --audio song.mp3 --cast claude,deepseek          # 有歌词文件就加 --lrc lyrics.lrc；文件名不是歌名就加 --title 歌名 --artist 歌手
+python $SKILL/scripts/new_project.py my_mv --audio song.mp3 --cast claude,deepseek          # 对好时间的 LRC 加 --lrc；只有歌词文字加 --lyrics 歌词.txt；文件名不是歌名就加 --title 歌名 --artist 歌手
 # 已经有 audio.timeline.json / audio.report.md 的话加 --timeline audio.timeline.json --report audio.report.md，就不再自动分析
 cd my_mv
 python tools/run.py doctor          # 第一次会装渲染用的 node 依赖；也会告诉你浏览器有没有用上显卡（用的是软件渲染会慢好几倍）

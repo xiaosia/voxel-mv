@@ -5,7 +5,7 @@
 用 curl 续传（没有 curl 就退回 urllib），镜像 hf-mirror.com 优先。
 
 用法：
-  python fetch_ct2_model.py small                 -> <技能目录>/models/faster-whisper-small（fetch_lyrics.py 会自动找这里）
+  python fetch_ct2_model.py small                 -> <技能目录>/models/faster-whisper-small（align_lyrics.py 会自动找这里）
   python fetch_ct2_model.py medium D:\\models\\fw-medium
 可用的名字：tiny / base / small / medium / large-v3
 """
@@ -82,7 +82,7 @@ def main():
     out = sys.argv[2] if len(sys.argv) > 2 else os.path.normpath(os.path.join(root, 'models', f'faster-whisper-{name}'))
     download(f'Systran/faster-whisper-{name}', out)
     print('模型就绪：' + os.path.abspath(out))
-    print('放在技能目录 models/ 下时 fetch_lyrics.py 会自动用；放别处就设 VOXEL_ASR_MODEL=' + os.path.abspath(out))
+    print('放在技能目录 models/ 下时 align_lyrics.py 会自动用；放别处就设 VOXEL_ASR_MODEL=' + os.path.abspath(out))
 
 
 if __name__ == '__main__':

@@ -2,7 +2,8 @@
 """Turn data/audio.timeline.json + data/lyrics.lrc into src/data.js (TL + LYR) and data/lines.json (for the check scripts).
 Usage: python3 tools/make_data.py <project_dir>
 Time before the first line (> 4 s) gets a '♪ 前奏' line, gaps longer than 4 s between lines a '♪ 间奏' line, the end a '♪ 尾奏'
-line, so every second of the song belongs to a line. '♪' stretches longer than 12 s are split at section boundaries / bar lines
+line, so every second of the song belongs to a line. An LRC line with a time but no text marks the end of the
+line before it (align_lyrics.py writes these); such lines get 'sung_end' and their end_guess uses it. '♪' stretches longer than 12 s are split at section boundaries / bar lines
 (about 10 s each, '♪ 前奏 1/3' …). A segment without any lyric gets one '♪' line."""
 import json, re, sys, os
 if hasattr(sys.stdout, 'reconfigure'): sys.stdout.reconfigure(encoding='utf-8', errors='replace'); sys.stderr.reconfigure(encoding='utf-8', errors='replace')
@@ -23,6 +24,7 @@ for p in STRUCT:   # 人工改了 label 也能对上名字：副歌1、副歌2�
 lrc = open(os.path.join(root, 'data/lyrics.lrc'), encoding='utf-8-sig').read()
 off = re.search(r'\[offset:(-?\d+)\]', lrc); off = int(off.group(1)) / 1000 if off else 0
 rows = []
+ENDS = {}   # 句首 → 句尾（LRC 里写了结束时间的句子）
 # 一行一句：普通 LRC「[00:01.99]歌词」和逐字 LRC「[00:01.99]我[00:01.99]们…」都按一行算一句，句首取第一个时间
 TS = re.compile(r'[\[<](\d+):(\d+(?:\.\d+)?)[\]>]')
 for ln in lrc.splitlines():
@@ -30,6 +32,7 @@ for ln in lrc.splitlines():
     if not ts or re.match(r'\[[a-z]+:', ln): continue
     text = TS.sub('', ln).strip()
     if text: rows.append([round(int(ts[0][0]) * 60 + float(ts[0][1]) + off, 3), text])
+    elif rows: ENDS[rows[-1][0]] = round(int(ts[0][0]) * 60 + float(ts[0][1]) + off, 3)   # 空时间行 = 上一句结束
 rows.sort()
 DUR = TL['duration']
 out = []
@@ -42,7 +45,8 @@ for i, (t, text) in enumerate(rows):
         out.append({'t': round(out[-1]['end_guess'], 3), 'text': '♪ 间奏', 'end_guess': t})
     nxt = rows[i + 1][0] if i + 1 < len(rows) else DUR
     # a sung line rarely lasts more than ~6 s; the rest of a long gap is an interlude
-    out.append({'t': t, 'text': text, 'end_guess': min(nxt, t + 6) if not text.startswith('♪') else nxt})
+    out.append({'t': t, 'text': text, 'end_guess': min(nxt, ENDS.get(t, t + 6)) if not text.startswith('♪') else nxt})
+    if t in ENDS: out[-1]['sung_end'] = min(nxt, ENDS[t])
 if rows and DUR - out[-1]['end_guess'] > 3:
     out.append({'t': round(out[-1]['end_guess'], 3), 'text': '♪ 尾奏', 'end_guess': DUR})
 for i, r in enumerate(out): r['end'] = out[i + 1]['t'] if i + 1 < len(out) else DUR
@@ -87,6 +91,9 @@ if STRUCT:
         while j + 1 < len(LYR) and LYR[j + 1]['text'].startswith('♪') and LYR[j + 1].get('part_id') == LYR[i]['part_id']: j += 1
         for k in range(i, j + 1): LYR[k]['text'] = '♪ ' + LYR[i]['part_name'] + (f' {k - i + 1}/{j - i + 1}' if j > i else '')
         i = j + 1
+SUNG = {r['t']: r['sung_end'] for r in out if 'sung_end' in r}   # 唱完的时间（有就给字幕用，没唱的尾巴不挂字幕）
+for l in LYR:
+    if l['t'] in SUNG: l['sung_end'] = round(SUNG[l['t']], 3)
 with open(os.path.join(root, 'src/data.js'), 'w', encoding='utf-8') as f:
     f.write('// generated from data/audio.timeline.json + data/lyrics.lrc\n')
     f.write('export const TL = ' + json.dumps(TL, ensure_ascii=False) + ';\n')

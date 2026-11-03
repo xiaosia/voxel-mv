@@ -82,10 +82,14 @@ def find_chrome():
 
 def env():
     e = dict(os.environ)
-    try:
-        import faster_whisper; print(f'  [OK]  （可选）faster-whisper {faster_whisper.__version__}：网上查不到歌词时会用它听歌识别')
-    except ImportError:
-        print(f'  [--]  （可选）faster-whisper 没装：网上查不到歌词时就没字幕。想要：{PY} -m pip install faster-whisper（再装 demucs 先分离人声更准）')
+    import importlib.util as _iu   # 歌词对齐（scripts/align_lyrics.py）要用的可选库
+    _have = {m: _iu.find_spec(m) is not None for m in ('faster_whisper', 'pypinyin', 'demucs', 'audio_separator')}
+    if _have['faster_whisper'] and _have['pypinyin']:
+        sep = 'demucs' if _have['demucs'] else ('audio-separator' if _have['audio_separator'] else '')
+        print('  [OK]  （可选）歌词对齐：faster-whisper + pypinyin' + (f' + {sep} 分离人声' if sep else f'；没装分离人声，会准一些：{PY} -m pip install demucs'))
+    else:
+        miss = ' '.join(n for n, m in (('faster-whisper', 'faster_whisper'), ('pypinyin', 'pypinyin'), ('demucs', 'demucs')) if not _have[m])
+        print(f'  [--]  （可选）歌词对齐没装全：没有对好时间的 LRC 时，字幕时间会不准或者没字幕。想要：{PY} -m pip install {miss}')
     ch = find_chrome()
     if ch: e['PLAYWRIGHT_CHROME'] = ch
     return e

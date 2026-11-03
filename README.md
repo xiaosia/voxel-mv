@@ -16,7 +16,7 @@
 ## 小白怎么用
 
 1. **把整个 `voxel-mv` 文件夹给 AI**（Claude Code、Codex 这类能在你电脑上跑命令的 AI），`characters/` 里的帧图也要在。
-2. **准备歌**：一个音频文件（mp3 / wav 都行），文件名最好是「歌手 - 歌名.mp3」。节拍和歌词都不用自己做：节拍会自动分析，歌词会先上网查，查不到再用 faster-whisper 听歌识别。手上有 `.lrc` 歌词文件就一起给，最准。
+2. **准备歌**：一个音频文件（mp3 / wav 都行），文件名最好是「歌手 - 歌名.mp3」。节拍和歌词都不用自己做：节拍会自动分析，歌词会先上网查字，再听歌把每句对到这首歌上。手上有歌词文字（网易云 / QQ 音乐复制的纯文本就行）就一起给，最准。
 3. **对 AI 说一句话**，比如：
 
 > 读 `voxel-mv/SKILL.md`，按里面的流程把 `D:\歌\寂寞烟火.mp3`（歌词 `D:\歌\寂寞烟火.lrc`）做成 MV，角色用 claude 和 deepseek。
@@ -33,7 +33,7 @@
 
 ## 电脑上要装的
 
-Windows、macOS、Linux 都能跑。需要 Node.js 20 以上、ffmpeg、Python 3（再 `pip install numpy pillow`）、Chrome 或 Edge。可选：`pip install faster-whisper`（网上查不到歌词时听歌识别），再加 `demucs` 先分离人声会更准。不用自己检查：AI 第一步会跑 `python tools/run.py doctor`，缺什么它会列出来，并给出安装命令。
+Windows、macOS、Linux 都能跑。需要 Node.js 20 以上、ffmpeg、Python 3（再 `pip install numpy pillow`）、Chrome 或 Edge。可选：`pip install faster-whisper pypinyin "audio-separator[gpu]"`（把歌词对到这首歌上；audio-separator 先分离人声，准很多，装不上就装 demucs）。不用自己检查：AI 第一步会跑 `python tools/run.py doctor`，缺什么它会列出来，并给出安装命令。
 
 doctor 最后一行「显卡渲染」如果是 `[慢]`（SwiftShader 之类），说明浏览器没用上显卡，出片会慢好几倍，照它下面的提示改。
 

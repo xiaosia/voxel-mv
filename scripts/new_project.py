@@ -3,8 +3,10 @@
 用法：
   python $SKILL/scripts/new_project.py <项目目录> --audio song.mp3 [--lrc lyrics.lrc] [--timeline audio.timeline.json] [--report audio.report.md]
          --cast claude,deepseek [--lead claude] [--name 我的MV] [--chars <角色目录>] [--seconds 30]
-  --lrc      歌词；不给就用 scripts/fetch_lyrics.py 自动找（联网查 lrclib → 本地语音识别 → 都没有就不做字幕）。
-             --title / --artist 帮它找对歌；--no-lyrics 不找、不要字幕
+  --lrc      歌词（时间已经和这个音频对好的 LRC，原样用）。
+  --lyrics   只有歌词文字（纯文本，或别的版本的 LRC）：用 scripts/fetch_lyrics.py → align_lyrics.py 把每句对到这首歌上。
+             两个都不给：自动找（lrclib 拿字 → 听歌对时间；都没有就只靠识别，再不行就不做字幕）。
+             --title / --artist 帮它找对歌；--no-lyrics 不找、不要字幕。结果和检查表在 data/analysis/（lyrics_check.md）
   --timeline 节奏分析结果；不给就自动用 scripts/analyze_audio.py 分析音频（只要 numpy 和 ffmpeg）
   --structure 人工校对过的段落表（structure.json，全曲时间）；不给就用 scripts/song_structure.py 按歌词重复、能量、旋律自动识别
   --cast     用哪些角色，名字是角色目录下的文件夹名（默认在 $SKILL/characters/ 里找）
@@ -20,7 +22,8 @@ HERE = os.path.dirname(os.path.abspath(__file__)); SKILL = os.path.dirname(HERE)
 ap = argparse.ArgumentParser(); ap.add_argument('project')
 ap.add_argument('--audio', required=True); ap.add_argument('--timeline')
 ap.add_argument('--lrc'); ap.add_argument('--report'); ap.add_argument('--no-lyrics', action='store_true')
-ap.add_argument('--title'); ap.add_argument('--artist'); ap.add_argument('--structure')
+ap.add_argument('--title'); ap.add_argument('--artist')
+ap.add_argument('--lyrics', help='歌词文字（纯文本一行一句，或别的版本的 LRC）：字用它的，时间对齐到这首歌'); ap.add_argument('--structure')
 ap.add_argument('--cast', required=True); ap.add_argument('--lead'); ap.add_argument('--name', default='MV')
 ap.add_argument('--chars', default=os.path.join(SKILL, 'characters')); ap.add_argument('--seconds', type=float)
 ap.add_argument('--from', dest='frm', type=float, default=0.0)
@@ -81,8 +84,9 @@ if not A.lrc and not A.no_lyrics:   # 没给歌词：自动找（找不到不算
     an = os.path.join(D, 'analysis'); os.makedirs(an, exist_ok=True)
     got = os.path.join(an, 'lyrics.lrc')
     r = subprocess.run([sys.executable, os.path.join(HERE, 'fetch_lyrics.py'), A.audio, '--out', got]
-                       + (['--title', A.title] if A.title else []) + (['--artist', A.artist] if A.artist else []))
-    if r.returncode == 0 and os.path.exists(got): A.lrc = got; print('（自动找的歌词，写 TREATMENT 前先对着歌听一遍开头几句，时间或字不对就改 data/analysis/lyrics.lrc 后重建项目）')
+                       + (['--title', A.title] if A.title else []) + (['--artist', A.artist] if A.artist else [])
+                       + (['--text', A.lyrics] if A.lyrics else []) + ['--preview'])
+    if r.returncode == 0 and os.path.exists(got): A.lrc = got; print('（歌词是自动对齐的：写 TREATMENT 前先看 data/analysis/lyrics_check.md，✗ 的句子听一遍；字不对就用 --lyrics 歌词.txt 重建，别只改字不改时间）')
 if A.lrc:
     import re
     raw = open(A.lrc, 'rb').read()
@@ -124,7 +128,7 @@ if os.path.exists(A.structure):
     if os.path.exists(os.path.join(an, 'structure.md')): shutil.copy(os.path.join(an, 'structure.md'), os.path.join(D, 'structure.md'))
 subprocess.run([sys.executable, os.path.join(P, 'tools/songmv/make_data.py'), P], check=True)
 lines = json.load(open(os.path.join(D, 'lines.json'), encoding='utf-8'))['lines']
-lyr = [{'t0': round(l['t'] + OFF, 3), 't1': round(min(l['end'], l['t'] + 6.5) + OFF, 3), 'text': l['text']} for l in lines if not l['text'].startswith('♪') and l['t'] < dur]   # 字幕用全曲时间
+lyr = [{'t0': round(l['t'] + OFF, 3), 't1': round(min(l['end'], l.get('sung_end', l['end']) + 0.3, l['t'] + 6.5) + OFF, 3), 'text': l['text']} for l in lines if not l['text'].startswith('♪') and l['t'] < dur]   # 字幕用全曲时间
 os.makedirs(os.path.join(P, 'assets'), exist_ok=True)
 json.dump(lyr, open(os.path.join(P, 'assets/lyrics.json'), 'w', encoding='utf-8'), ensure_ascii=False)
 
