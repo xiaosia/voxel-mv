@@ -12,13 +12,14 @@
       song-mv  写 ACTIONS.json 的 events: [{"t": 秒, "what": "片名浮出"}]
     登记了就要真的做出来，并且看得出来。
 
-  H1 开场钩子：全片从歌的第 0 秒开始时，前 5 秒里至少 1 个事件（第一眼就要有东西可看，不要空镜慢慢淡入）
-  H2 没词长段不空：连续的 ♪ 行（前奏、间奏、尾奏，data/lines.json）加起来 ≥ 16 秒时，里面每 4 小节至少 1 个事件
-  H3 人声进来要兑现：≥ 8 秒的 ♪ 段之后第一句歌词的句首 ±1 拍内至少 1 个事件（揭开钩子、或一次转场推进正片）
+  H1 开场钩子：全片从歌的第 0 秒开始时，前 5 秒里至少 1 个事件（第一眼就要有东西可看，不要空镜慢慢淡入）【必过】
+  H2 没词长段不空：连续的 ♪ 行（前奏、间奏、尾奏，data/lines.json）加起来 ≥ 16 秒时，里面每 4 小节至少 1 个事件 【警告】
+  H3 人声进来要兑现：≥ 8 秒的 ♪ 段之后第一句歌词的句首 ±1 拍内至少 1 个事件（揭开钩子、或一次转场推进正片）【警告】
   有段落表（data/structure.json → data/lines.json 的 parts，song_structure.py 产出）时再查：
-  H4 副歌、炸点进来要炸：每一遍副歌 / 炸点的开头 ±1 拍内至少 1 个事件（一般是一次大转场或全片最大的动作）
-  H5 换段要换：每个间奏、桥段的开头 ±1 拍内至少 1 个事件（换景、换光色、换视角的那一下）
-用法：python hook_check.py [项目目录] [--mode safe|free]  → out/hook_check.md；voxel-mv 的场景关也会调用它。"""
+  H4 副歌、炸点进来要炸：每一遍副歌 / 炸点的开头 ±1 拍内至少 1 个事件（一般是一次大转场或全片最大的动作）【必过】
+  H5 换段要换：每个间奏、桥段的开头 ±1 拍内至少 1 个事件（换景、换光色、换视角的那一下）【警告】
+报告 → out/hook_check.md，结构化结果 → out/hook_check.json（report.py 汇总）。
+用法：python hook_check.py [项目目录] [--mode safe|free] [--json]；voxel-mv 的场景关也会调用它。"""
 import json, os, sys
 if hasattr(sys.stdout, 'reconfigure'): sys.stdout.reconfigure(encoding='utf-8', errors='replace'); sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 
@@ -116,15 +117,40 @@ def check(P='.'):
 
 
 if __name__ == '__main__':
-    args = sys.argv[1:]; mode = None
-    if '--mode' in args: i = args.index('--mode'); mode = args[i + 1]; del args[i:i + 2]
-    P = args[0] if args else '.'
+    import argparse
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import checks_common as CC
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument('project', nargs='?', default='.', help='项目目录（默认当前目录）')
+    ap.add_argument('--mode', choices=('safe', 'free'), help='默认读项目里 MODE 文件（现在只影响报告措辞，必过档两种模式都拦）')
+    ap.add_argument('--json', action='store_true', help='只把结构化结果写进 out/hook_check.json（markdown 报告照写）')
+    a = ap.parse_args()
+    P, mode = a.project, a.mode
     if not mode:
         mf = os.path.join(P, 'MODE'); mode = (open(mf, encoding='utf-8').read().split() or ['safe'])[0] if os.path.exists(mf) else 'safe'
     fails, rep = check(P)
-    out = [f"# hook check（钩子关）\n\nmode: **{'safe (gates block the render)' if mode != 'free' else 'free (advisory)'}**\n"] + rep
-    out += ['', '## gates', ''] + ([f'- {f}' for f in fails] or ['- H1–H5 全部通过']) + ['', f"**{'PASS' if not fails else 'FAIL'}**"]
+    by = {}
+    for f in fails:
+        rid, rest = f.split()[0], f.split(None, 1)[1] if len(f.split()) > 1 else ''
+        by.setdefault(rid, []).append(rest)
+    NAMES = {'H1': '开场钩子', 'H2': '没词长段不空', 'H3': '人声进来要兑现', 'H4': '副歌/炸点要炸', 'H5': '换段要换'}
+    RULES = []
+    for rid in ('H1', 'H2', 'H3', 'H4', 'H5'):
+        ok = not by.get(rid)
+        lines = [x[2:].strip() for x in rep if x.startswith('- ' + rid)]
+        RULES.append({'rule': rid, 'name': NAMES[rid], 'ok': ok, 'detail': '；'.join(by.get(rid, [])) or ('；'.join(lines) or '通过')})
+    for r in RULES: r.setdefault('tier', CC.tier(r['rule']))
+    tiers = {'must': 0, 'auto': 0, 'warn': 0}
+    for r in RULES:
+        if not r['ok']: tiers[r['tier']] += 1
+    out = [f"# hook check（钩子关）\n\nmode: **{'safe' if mode != 'free' else 'free'}**；没过：必过 {tiers['must']}，警告 {tiers['warn']}\n"] + rep
+    out += ['', '## gates', '', '| 关 | 结果 | 说明 |', '|---|---|---|']
+    out += ['| %s %s | %s | %s |' % (r['rule'], r['name'], ('**FAIL·%s**' % CC.CN[r['tier']]) if not r['ok'] else 'PASS', r['detail'][:200]) for r in RULES]
+    out += ['', f"**{'PASS' if tiers['must'] == 0 else 'FAIL'}**（必过档全过即 PASS，两种模式都拦）"]
     os.makedirs(os.path.join(P, 'out'), exist_ok=True)
     open(os.path.join(P, 'out/hook_check.md'), 'w', encoding='utf-8').write('\n'.join(out) + '\n')
-    print('\n'.join(out[-(len(fails) + 3):])); print('-> out/hook_check.md')
-    sys.exit(3 if fails and mode != 'free' else 0)
+    p = CC.dump_json('hook_check', RULES, os.path.join(P, 'out'))
+    if not a.json:
+        print('\n'.join(f"| {r['rule']} | {'PASS' if r['ok'] else 'FAIL·' + CC.CN[r['tier']]} | {r['detail'][:120]} |" for r in RULES))
+        print(f"-> out/hook_check.md, {p}  {'PASS' if tiers['must'] == 0 else f'必过 {tiers['must']} 项 FAIL'}")
+    sys.exit(CC.exit_code(RULES))

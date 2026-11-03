@@ -1,11 +1,15 @@
 // voxel-mv 引擎（来自七 AI 接力 MV《把回忆拼好给你》的公共引擎）。只有通用能力，没有任何场景：场景由 shots.js 自己搭。
 // 单曲 MV：plan.json 的 start = 0、end = 全曲帧数、handoffs 为空，交接相关的函数不用管。
 // 多段接力：plan.json 写本段的 start/end 和 handoffs，交接函数（T1–T6）照用，见 SKILL 的 references/relay.md。
-// 内容：渲染器和灯光、方块工具、角色（身高校正、贴地、防穿模、踩拍）、表情符号、段内转场、微缩后期、字幕、
-// 交接画面（T1–T6 两边共用同一份代码，保证切点对得上）、song-mv 页面契约（DUR / render / probe / TRANSITIONS）。
+// 内容：渲染器和灯光、方块工具、角色（身高校正、贴地、防穿模、踩拍）、碰撞（collide-core + collide，默认开）、
+// 表情符号、段内转场、微缩后期、字幕、交接画面（T1–T6 两边共用同一份代码，保证切点对得上）、song-mv 页面契约（DUR / render / probe / TRANSITIONS）。
 // 时间：页面内部一律用全曲帧号 f（= 段起始帧 + 本段第几帧）和全曲秒数 t = f / 24。
 import * as THREE from 'three';
+import * as collide from './collide.js';
+import * as camlib from './camera.js';
 export { THREE };
+export { collider, noBlock, mark, spot, reserve, scatter, collect as collideCollect, CFG as collideCFG } from './collide.js';
+export const cam = camlib.api;               // 运镜库：setupShot 里 R.cam.dolly({amt}) / R.cam.punch({amt, shake}) …（只对这一帧生效）
 
 // 节拍网格：plan.json 的 tempo {beat0, spb}（new_project.py 按 beat_times 拟合）。下面的默认值是《把回忆拼好给你》的
 export const FPS = 24;
@@ -44,7 +48,8 @@ key.shadow.bias = -0.0008;
 key.shadow.radius = 4;
 scene.add(key, key.target);
 
-export function look(px, py, pz, tx, ty, tz) { camera.position.set(px, py, pz); camera.lookAt(tx, ty, tz); camera.updateMatrixWorld(); }
+const LOOK_T = new THREE.Vector3();          // 运镜库的基础看向点（R.look 记录；camera.js 在它上面叠运镜）
+export function look(px, py, pz, tx, ty, tz) { camera.position.set(px, py, pz); camera.lookAt(tx, ty, tz); camera.updateMatrixWorld(); LOOK_T.set(tx, ty, tz); }
 export function keyAt(x, y, z, color = 0xfff0dc, intensity = 2.4) { key.position.set(x - 7, y + 12, z + 9); key.target.position.set(x, y, z); key.color.set(color); key.intensity = intensity; }
 // 天空：地平线颜色往上渐变到偏淡紫的顶，和角色立绘的棚拍底色一个路子
 const skyCv = document.createElement('canvas'); skyCv.width = 2; skyCv.height = 256;
@@ -143,6 +148,14 @@ export async function loadChar(name, acts = null) {
   const root = new THREE.Group(); scene.add(root);
   const pivot = new THREE.Group(); root.add(pivot);
   const mat = new THREE.MeshBasicMaterial({ transparent: true, alphaTest: 0.02, toneMapped: false, side: THREE.DoubleSide, fog: false });
+  mat.onBeforeCompile = s => {   // 整张立牌写同一个深度（脚往镜头方向 foot_r 那点的投影深度）：道具要么整在前要么整在后，不再把角色切开
+    s.uniforms.uFlatDepth = { value: mat.userData.flatD ?? 0.5 };
+    s.fragmentShader = s.fragmentShader
+      .replace('#include <common>', '#include <common>\nuniform float uFlatDepth;')
+      .replace('#include <dithering_fragment>', '#include <dithering_fragment>\n\tgl_FragDepth = uFlatDepth;');
+    mat.userData.shader = s;
+  };
+  mat.customProgramCacheKey = () => 'flatdepth';
   const plane = new THREE.Mesh(new THREE.PlaneGeometry(cv * k, cv * k), mat);
   plane.position.set((cv / 2 - meta.center_x) * k, (meta.baseline_y - cv / 2) * k, 0);
   pivot.add(plane);
@@ -157,12 +170,17 @@ export async function loadChar(name, acts = null) {
   return ch;
 }
 let curT = 0;
-// 摆一个角色：动作、帧序（从 0 数）、脚底位置。o：flip 朝左、lean 倾斜、hop 跳起、breath 呼吸、tint 调色、
+// 摆一个角色：动作、帧序（从 0 数）、脚底位置。o：flip 朝左、lean 倾斜、hop 跳起、yaw 立牌翻转角（弧度，舞句的转身/转圈用）、breath 呼吸、tint 调色、
 // bob 每拍下蹲和左右摆的强度（默认 1，0 关掉）、shadow 影子、snap 贴地（默认开）、onTop 画在最前面（交接定位默认开）
 export function pose(ch, act, idx, x, y, z, o = {}) {
   const arr = ch.tex[act];
   if (!arr) throw new Error(`${ch.name} 的动作 ${act} 没加载：把它写进 plan.json 的 tracks 或 extra_actions`);
-  const i = clamp(Math.floor(idx), 0, arr.length - 1);
+  let i = clamp(Math.floor(idx), 0, arr.length - 1);
+  const bads = ch.meta.bad && ch.meta.bad[act];   // 坏帧自动换成最近的好帧（结果和探针一致）
+  if (bads && bads.includes(i)) for (let d = 1; d < arr.length; d++) {
+    if (i - d >= 0 && !bads.includes(i - d)) { i -= d; break; }
+    if (i + d < arr.length && !bads.includes(i + d)) { i += d; break; }
+  }
   ch.mat.map = arr[i]; ch.mat.needsUpdate = true; ch.cur = { act, i };
   ch.root.visible = true;
   ch.o = { scale: o.scale ?? 1, snap: o.snap !== false, onTop: !!o.onTop, hop: o.hop || 0, y0: y };   // 体素关用
@@ -181,20 +199,25 @@ export function pose(ch, act, idx, x, y, z, o = {}) {
   ch.mat.opacity = o.opacity ?? 1;
   ch.sh.visible = o.shadow ?? true;
   ch.mat.depthTest = !o.onTop; ch.plane.renderOrder = o.onTop ? 10 : 0;   // onTop：画在场景最前面，不会被地面或墙挡住
-  ch.flip = !!o.flip;
+  ch.flip = !!o.flip; ch.yaw = o.yaw || 0;
+  collide.intent(ch, x, z, o);   // 记下本帧站位，setup() 在镜头摆好后统一解算碰撞
 }
-// 立牌朝向镜头（绕 Y 轴）。立牌放在脚印最靠镜头的一边，脚前面的砖块挡不到鞋底；再按距离比例缩回，屏幕上大小不变。
-// 必须在镜头摆好之后算：引擎在 setupShot 之后自动调用
-const FOOT_FWD = 0.45;
+// 立牌朝向镜头（绕 Y 轴），并更新整张同深度的 uFlatDepth。必须在镜头摆好之后算：引擎在 setupShot 之后自动调用
 function faceCamera() {
+  camera.updateMatrixWorld();
   for (const ch of Object.values(chars)) {
     if (!ch.root.visible) continue;
     const { x, y, z } = ch.root.position;
     const dx = camera.position.x - x, dz = camera.position.z - z;
     ch.pivot.rotation.y = Math.atan2(dx, dz);
-    const dist = Math.hypot(dx, camera.position.y - y, dz), fw = Math.min(FOOT_FWD, dist * 0.2), ks = (dist - fw) / dist, sx = ch.flip ? -1 : 1;
-    ch.plane.position.set(ch.planeX * ks * sx, ch.planeY * ks, fw);
-    ch.plane.scale.set(sx * ks, ks, 1);
+    const cy = Math.cos(ch.yaw || 0), sx = (ch.flip ? -1 : 1) * (cy < 0 ? -1 : 1) * Math.max(0.04, Math.abs(cy));   // yaw：舞句里立牌翻面（转身、转圈）
+    ch.plane.position.set(ch.planeX * sx, ch.planeY, 0);
+    ch.plane.scale.set(sx, 1, 1);
+    const dl = Math.hypot(dx, dz), fr = Math.max(0.05, ch.meta.foot_r ?? 0.3);   // 深度取样点：脚 + 朝镜头 foot_r
+    _v.set(dl > 1e-6 ? x + dx / dl * fr : x, y, dl > 1e-6 ? z + dz / dl * fr : z).project(camera);
+    const d = clamp(_v.z * 0.5 + 0.5, 0, 1);
+    ch.mat.userData.flatD = d;   // 首帧编译前 onBeforeCompile 也从这里取值，单帧渲染不落默认值
+    if (ch.mat.userData.shader) ch.mat.userData.shader.uniforms.uFlatDepth.value = d;
   }
 }
 // 交接用：把角色放到屏幕上的指定位置。xPx 身体中线、feetPx 脚底（像素），hFrac 身高占画面高的比例。
@@ -261,12 +284,13 @@ export function actAt(name, f) {
   for (const x of tr) { const f0 = x[0] === 'off' ? x[1] : x[2]; if (f0 <= f) e = x; else break; }
   if (!e || e[0] === 'off') return null;
   const [mode, act, f0, f1] = e;
-  const n = ch.tex[act].length;
+  const n = mode === 'dance' ? 0 : ch.tex[act].length;
   if (mode === 'loop') {
     const o = e[4];
     if (o && (o.from != null || o.to != null)) { const a0 = o.from ?? 0, a1 = o.to ?? n - 1, m = a1 - a0 + 1; return { act, idx: a0 + ((Math.floor(beatOf(t)) % m) + m) % m, mode }; }
     return { act, idx: loopIdx(ch, act, t), mode };
   }
+  if (mode === 'dance') return danceAt(name, e, t);
   if (mode === 'ping') return { act, idx: ping(t, e[4], e[5]), mode };
   if (mode === 'hold') return { act, idx: e[4], mode };
   if (mode === 'once') {
@@ -278,6 +302,44 @@ export function actAt(name, f) {
   return null;
 }
 export const plan = () => PLAN;
+
+// ---------- 编舞层：dance 条目按舞句库（engine/moves.json + plan.json 的 moves）一拍一步展开 ----------
+//   ["dance", 舞句, f0, f1, {mirror, canon, speed, size}]
+//   mirror 镜像（朝向和左右位移反过来，多人对称用）；canon 晚几拍开始（可以是小数，轮唱/波浪用）；
+//   speed 0.5 半速（一步两拍）/ 2 倍速；size 位移、跳、倾斜的幅度倍数。f0 放在拍上，舞句从 f0 那一拍开始循环
+let MOVES = { slots: {}, phrases: {} };
+export const moves = () => MOVES;
+export function phraseOf(id) {
+  const ph = MOVES.phrases[id];
+  if (!ph) throw new Error(`舞句 ${id} 不在 engine/moves.json 或 plan.json 的 moves 里`);
+  return ph;
+}
+// 槽位（@clap 这种）→ 这个角色有的第一个动作；不是槽位就原样返回
+export function resolveAct(meta, a) {
+  if (a[0] !== '@') return a;
+  const c = (MOVES.slots[a] || []).find(x => meta.actions[x]);
+  if (!c) throw new Error(`槽位 ${a} 里的动作这个角色一个都没有：${(MOVES.slots[a] || []).join(' / ')}`);
+  return c;
+}
+export function danceActs(meta, id) { return [...new Set(phraseOf(id).steps.map(s => resolveAct(meta, s.a)))]; }
+const easeO = x => 1 - (1 - clamp(x, 0, 1)) ** 2, easeM = x => { x = clamp(x, 0, 1); return x * x * (3 - 2 * x); };
+function danceAt(name, e, t) {
+  const ch = chars[name], ph = phraseOf(e[1]), o = e[4] || {}, S = ph.steps, n = S.length;
+  const size = o.size ?? 1, mir = o.mirror ? -1 : 1;
+  const B0 = Math.round(beatOf(e[2] / FPS));
+  let b = (beatOf(t + 0.5 / FPS) - B0 - (o.canon || 0)) * (o.speed || 1);   // +半帧：拍点那一帧（四舍五入到帧）算新的一步，和检查脚本一致
+  const pre = b < 0; if (pre) b = 0;
+  const kk = Math.floor(b), k = ((kk % n) + n) % n, loop = Math.floor(kk / n), p = pre ? 0 : b - kk;
+  const st = S[k], pv = kk > 0 ? S[(k - 1 + n) % n] : {};   // 第一步从站位（偏移 0）出发
+  const act = resolveAct(ch.meta, st.a), nf = ch.tex[act].length;
+  let i = st.i2 != null && p >= 0.5 ? st.i2 : (st.i ?? 0); if (i < 0) i += nf; i = clamp(i, 0, nf - 1);
+  const mix = (key, u) => lerp(pv[key] || 0, st[key] || 0, u);
+  const turns = S.filter(s => s.turn).length, before = loop * turns + S.slice(0, k).filter(s => s.turn).length;
+  const yaw = Math.PI * (before + (st.turn ? easeM(p / 0.35) : 0) + (o.mirror ? 1 : 0)) + (st.spin ? 2 * Math.PI * easeM(p / 0.6) : 0);
+  return { act, idx: i, mode: 'dance', phrase: e[1], step: k,
+    fx: { dx: mix('dx', easeO(p / 0.4)) * size * mir, dz: mix('dz', easeO(p / 0.4)) * size, hop: (st.hop || 0) * size * Math.sin(Math.PI * p),
+          lean: mix('lean', easeO(p / 0.3)) * size * mir, yaw, sq: st.sq || 0 } };
+}
 // 这一帧属于哪个镜头（sf 是引擎传给 setupShot 的镜头帧）
 export function shotOf(sf) { return PLAN.shots.find(s => sf >= s.f0 && sf <= s.f1) || PLAN.shots[PLAN.shots.length - 1] || { id: 'S01', f0: PLAN.start, f1: PLAN.end - 1 }; }
 // 按动作轨摆角色（位置、朝向、调色由你给）。这一帧动作轨里没有她就隐藏，返回 false
@@ -285,6 +347,12 @@ export function play(name, f, x, y, z, o = {}) {
   const a = actAt(name, f), ch = chars[name];
   if (!a) { ch.root.visible = false; return false; }
   const stillish = a.mode === 'ping' || a.mode === 'after' || a.mode === 'hold';
+  if (a.fx) {   // 舞句：位移、跳、倾斜、翻面叠加在你给的站位和选项上
+    const fx = a.fx;
+    pose(ch, a.act, a.idx, x + fx.dx * H, y, z + fx.dz * H, { ...o, hop: (o.hop || 0) + fx.hop * H, lean: (o.lean || 0) + fx.lean,
+      yaw: (o.yaw || 0) + fx.yaw, bob: (o.bob ?? 1) * (1 + fx.sq) });
+    return true;
+  }
   pose(ch, a.act, a.idx, x, y, z, { breath: stillish ? breath(f / FPS) : 1, ...o });
   return true;
 }
@@ -325,6 +393,7 @@ export function makeBurst(n = 80, emissive = 0xffffff) {
 // =====================================================================
 // 段内转场：A（旧镜头）和 B（新镜头）分别渲到两张图，再用全屏着色器混合。
 // 模式：1 方块雨落  5 甩镜上摇  6 穿梭推进  7 拉远  8 碎裂崩塌  10 体素化（光爆）  11 横条滑移  12 甩镜横移
+//      13 闪白/闪黑  14 落色再起  15 圈入圈出  16 形状匹配  17 遮挡扫过  18 故障  19 拉穿  20 旋转  21 光晕扫过  22 分屏滑开  23 抖帧硬切
 // =====================================================================
 const rtOpts = { type: THREE.HalfFloatType, samples: 4, colorSpace: THREE.LinearSRGBColorSpace };
 const rtA = new THREE.WebGLRenderTarget(1920, 1080, rtOpts), rtB = new THREE.WebGLRenderTarget(1920, 1080, rtOpts);
@@ -333,11 +402,12 @@ const tMat = new THREE.ShaderMaterial({
     tA: { value: rtA.texture }, tB: { value: rtB.texture }, p: { value: 0 }, mode: { value: 0 },
     center: { value: new THREE.Vector2(0.5, 0.5) }, grid: { value: new THREE.Vector2(16, 9) },
     glow: { value: new THREE.Color(0xfff4e0) }, glowAmt: { value: 0.0 },
+    uColor: { value: new THREE.Color('#ffffff') }, uDir: { value: 1.0 }, uOff: { value: new THREE.Vector2() },
   },
   vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`,
   fragmentShader: `
     uniform sampler2D tA, tB; uniform float p; uniform int mode; uniform vec2 center, grid;
-    uniform vec3 glow; uniform float glowAmt; varying vec2 vUv;
+    uniform vec3 glow; uniform float glowAmt; uniform vec3 uColor; uniform float uDir; uniform vec2 uOff; varying vec2 vUv;
     float h1(vec2 c){ return fract(sin(dot(c, vec2(127.1, 311.7))) * 43758.5453); }
     float eio(float x){ x = clamp(x, 0.0, 1.0); return x < 0.5 ? 4.0*x*x*x : 1.0 - pow(-2.0*x + 2.0, 3.0) / 2.0; }
     vec3 tex(int which, vec2 uv){ uv = clamp(uv, 0.001, 0.999); return which == 0 ? texture2D(tA, uv).rgb : texture2D(tB, uv).rgb; }
@@ -402,6 +472,65 @@ const tMat = new THREE.ShaderMaterial({
         else col = tex(1, vec2(x + dir, uv.y));
         float seam = abs(x - (dir > 0.0 ? 0.0 : 1.0));
         col += glow * 0.5 * (1.0 - smoothstep(0.0, 0.006, seam)) * step(0.001, s) * step(s, 0.999);
+      } else if (mode == 13) {               // 闪白/闪黑（uColor，默认白）：中点最亮，前后各露出一边画面
+        col = mix(tex(p < 0.5 ? 0 : 1, uv), uColor, clamp(sin(p * 3.14159) * 1.15, 0.0, 1.0));
+      } else if (mode == 14) {               // 落色再起（uColor，默认黑）：A 落进颜色、停一拍、B 从颜色里浮出来
+        float g = p < 0.5 ? 1.0 - eio(p / 0.45) : eio((p - 0.55) / 0.45);
+        col = mix(uColor, tex(p < 0.5 ? 0 : 1, uv), clamp(g, 0.0, 1.0));
+      } else if (mode == 15) {               // 圈入圈出（center=圆心，dir=+1 新画面从圆心长出来 / -1 旧画面收进圆里）
+        float r = length((uv - center) * vec2(1.7778, 1.0));
+        float rr = (uDir > 0.0 ? e : 1.0 - e) * 1.3;
+        col = mix(uDir > 0.0 ? tex(1, uv) : tex(0, uv), uDir > 0.0 ? tex(0, uv) : tex(1, uv), smoothstep(-0.004, 0.004, r - rr));
+      } else if (mode == 16) {               // 形状匹配：uOff = a−b（JS 按 cut.match 算），B 从匹配位置滑回原位
+        col = mix(tex(0, uv), tex(1, uv + uOff * (1.0 - e)), smoothstep(0.3, 0.7, e));
+      } else if (mode == 17) {               // 遮挡扫过：一块色板（uColor，默认深色）从 dir=+1 左往右扫过，前后换画面
+        float d = uDir > 0.0 ? uv.x : 1.0 - uv.x;
+        float head = e * 1.4 - 0.2, w = 0.18;
+        col = mix(tex(0, uv), tex(1, uv), 1.0 - step(head - w, d));
+        float band = 1.0 - smoothstep(w * 0.8, w, abs(d - head));
+        vec3 occ = uColor * (0.82 + 0.18 * h1(floor(uv * vec2(48.0, 27.0)))) * (0.85 + 0.15 * uv.y);
+        col = mix(col, occ, band);
+      } else if (mode == 18) {               // 故障：中段最强，RGB 分离 + 行块错位，信号坏掉的感觉里换画面
+        float g = sin(p * 3.14159), tt = floor(p * 12.0);
+        float blk = step(0.35, h1(vec2(floor(uv.y * 16.0), tt)));
+        float off = (h1(vec2(tt, 7.7)) - 0.5) * 0.1 * g * blk;
+        vec2 uvd = uv + vec2(off, 0.0);
+        vec3 cA = vec3(tex(0, uvd + vec2(0.012, 0.0) * g).r, tex(0, uvd).g, tex(0, uvd - vec2(0.012, 0.0) * g).b);
+        vec3 cB = vec3(tex(1, uvd + vec2(0.012, 0.0) * g).r, tex(1, uvd).g, tex(1, uvd - vec2(0.012, 0.0) * g).b);
+        col = mix(cA, cB, step(0.5, p));
+        col += uColor * g * g * 0.25;
+      } else if (mode == 19) {               // 拉穿：A 往 center 冲进去、黑点一捏，B 从里面拉出来（比 through 重）
+        float zA = 1.0 + 3.0 * e * e, zB = 1.0 + 2.4 * (1.0 - e) * (1.0 - e);
+        float blur = sin(p * 3.14159) * 0.28;
+        vec3 a = vec3(0.0), b = vec3(0.0);
+        for (int i = 0; i < 12; i++) {
+          float k = 1.0 - blur * float(i) / 11.0;
+          a += tex(0, center + (uv - center) / (zA / k));
+          b += tex(1, center + (uv - center) / (zB / k));
+        }
+        col = mix(a / 12.0, b / 12.0, smoothstep(0.4, 0.6, p));
+        col = mix(col, uColor, 0.55 * sin(p * 3.14159));
+      } else if (mode == 20) {               // 旋转：A 转着放大出画，B 转着缩小进画（dir=±1 转向，center=旋转中心）
+        float a1 = uDir * e * 2.2, a2 = uDir * (1.0 - e) * 2.2;
+        vec2 pA = center + mat2(cos(a1), -sin(a1), sin(a1), cos(a1)) * (uv - center) / mix(1.0, 2.6, e);
+        vec2 pB = center + mat2(cos(a2), -sin(a2), sin(a2), cos(a2)) * (uv - center) / mix(2.6, 1.0, e);
+        col = mix(tex(0, pA), tex(1, pB), smoothstep(0.35, 0.65, e));
+      } else if (mode == 21) {               // 光晕扫过：暖光（uColor，默认暖黄）从 dir=+1 左下角漫进来，把画面换成 B
+        float d = (uv.x + uv.y) * 0.5;
+        if (uDir < 0.0) d = 1.0 - d;
+        float head = e * 1.5 - 0.15;
+        col = mix(tex(0, uv), tex(1, uv), 1.0 - smoothstep(head - 0.5, head, d));
+        col += uColor * exp(-abs(d - head) * 7.0) * 0.6;
+      } else if (mode == 22) {               // 分屏滑开：A 左右两半往 dir=+1 两边滑开，露出底下的 B
+        float s = eio(p), side = uv.x < 0.5 ? 1.0 : -1.0;
+        float x = uv.x + side * uDir * s;
+        col = (x >= 0.0 && x <= 1.0) ? tex(0, vec2(x, uv.y)) : tex(1, uv);
+        float seam = min(abs(uv.x - s), abs(uv.x - (1.0 - s)));
+        col += glow * 0.5 * (1.0 - smoothstep(0.0, 0.006, seam)) * step(0.001, s) * step(s, 0.999);
+      } else if (mode == 23) {               // 抖帧硬切：A B A B B 五段跳切，最后一跳落回 key 那一拍
+        int seg = int(p * 5.0);
+        bool b = seg == 1 || seg >= 3;
+        col = tex(b ? 1 : 0, uv);
       } else {                               // 1 方块雨落进新画面，8 旧画面碎成方块掉下去
         vec2 cell = floor(uv * grid);
         float w = 0.45;
@@ -702,10 +831,26 @@ function screenPoints() {
 let SEG = null, CUTS = [], HAS_T2 = false, LASTV = {};
 function cutAt(f) { return CUTS.find(k => f >= k.c - k.len / 2 && f < k.c + k.len / 2); }
 function shotFrameFor(f) { const cut = cutAt(f); return cut ? (f < cut.c ? cut.c - 1 : cut.c) : f; }
+let lastShotId = null;
 function setup(f, sf) {
   curT = f / FPS;
+  collide.clearIntents();
   hideChars();
   const v = SEG.setupShot(f, sf) || {};
+  const shot = shotOf(sf);
+  camlib.beginFrame(f, shot.id);              // 运镜轨叠在 setupShot 摆好的机位上（follow 要碰撞后的位置，endFrame 再套）
+  if (shot.id !== lastShotId) { collide.collect(); lastShotId = shot.id; }   // 换镜头场景变了，重新收一遍碰撞体
+  collide.beginFrame(f, shot.id);
+  const tp = (PLAN.touch || []).filter(p => f >= p.f0 && f < p.f1).map(p => [p.a, p.b]);   // 拥抱、牵手：登记的一对不互相推
+  const cr = collide.resolveFrame(camera.position, tp);
+  collide.clearIntents();
+  for (const n of cr.nudges) {   // 推完了重新贴地（文档流程第 4 步）
+    const ch = chars[n.who];
+    if (ch && ch.o && ch.o.snap !== false) ch.root.position.y = Math.max(ch.o.y0, groundAt(ch.root.position.x, ch.o.y0, ch.root.position.z));
+  }
+  window.NUDGES = cr.nudges.map(n => ({ ...n, f }));
+  window.STUCK = cr.stuck.map(s => ({ ...s, f }));
+  camlib.endFrame(f, shot.id);                // follow（读碰撞后的角色位置）+ 记 CAMLOG
   faceCamera();
   return v;
 }
@@ -723,9 +868,13 @@ function render(f) {
     u.p.value = (f - (cut.c - cut.len / 2) + 0.5) / cut.len;
     u.mode.value = cut.mode; u.center.value.set(...(cut.center || [0.5, 0.5])); u.grid.value.set(...(cut.grid || [16, 9]));
     u.glowAmt.value = cut.glowAmt || 0;
+    u.uColor.value.set(cut.color || TINT[cut.mode] || '#ffffff');
+    u.uDir.value = cut.dir ?? 1;
+    if (cut.match) u.uOff.value.set(cut.match.a[0] - cut.match.b[0], cut.match.a[1] - cut.match.b[1]); else u.uOff.value.set(0, 0);
     renderer.render(tScene, tCam);
     v = f < cut.c ? vA : vB;
   }
+  camlib.take(cut ? (f < cut.c ? 0 : 1) : 0);   // 可见那一侧的运镜记档（CAMLOG 给运镜关用）
   pMat.uniforms.focus.value = v.focus ?? 0.5; pMat.uniforms.band.value = v.band ?? 0.22; pMat.uniforms.hblur.value = v.hblur ?? 0;
   applyGrade(f, v.grade);
   renderer.copyFramebufferToTexture(fbPos, fbTex); renderer.render(pScene, tCam);
@@ -763,26 +912,40 @@ function voxelInfo(v) {
       const hit = _ray.intersectObjects(grounds.filter(o => o.visible), true).find(h => h.object.visible);
       if (hit) { g = hit.point.y; deep = true; }
     }
-    // 鞋底三个点（左脚、右脚、中线，在脚底线上方 2% 身高）从镜头打射线，先撞到场景就是被挡住
-    let blocked = 0, tested = 0;
+    // 鞋底三个点（左脚、右脚、中线，在脚底线上方 2% 身高）从镜头打射线：foot_r 内撞到算「贴着站」不算挡（推开后贴墙是合法的）
+    const footR = Math.max(0.05, m.foot_r ?? 0.3);
+    let blocked = 0, tested = 0, legit = 0;
     if (!ch.o.onTop) for (const u of [q[6], q[8], m.center_x]) {
       _sp.set((u - cv / 2) * k, (cv / 2 - (m.baseline_y - 0.02 * m.stand_h)) * k, 0).applyMatrix4(ch.plane.matrixWorld);
-      _cp.copy(_sp).sub(camera.position); const d = _cp.length(); _rc.set(camera.position, _cp.normalize()); _rc.far = d - 0.05;
-      tested++; if (_rc.intersectObjects(blockers, false).length) blocked++;
+      _cp.copy(_sp).sub(camera.position); const d = _cp.length(); _rc.set(camera.position, _cp.normalize());
+      tested++;
+      _rc.far = d - 0.05;
+      if (_rc.intersectObjects(blockers, false).length) {
+        _rc.far = d - footR;
+        if (_rc.intersectObjects(blockers, false).length) blocked++; else legit++;   // 只在 foot_r 内：推开后贴着的家具
+      }
     }
     out.push({ id: p.id, act: ch.cur.act, i: ch.cur.i, bad: !!(m.bad && m.bad[ch.cur.act] && m.bad[ch.cur.act].includes(ch.cur.i)),
       eyeW: eyeSole * k * ch.o.scale, H: H * ch.o.scale, scale: ch.o.scale, snap: ch.o.snap, onTop: ch.o.onTop, hop: ch.o.hop,
-      gap: g === -Infinity ? null : W.y - g, noGround: ch.o.snap && g === -Infinity, deep, blocked, tested,
-      pos: [W.x, W.y, W.z], right: W.x * right.x + W.y * right.y + W.z * right.z, flip: !!ch.flip,
+      gap: g === -Infinity ? null : W.y - g, noGround: ch.o.snap && g === -Infinity, deep, blocked, legit, tested,
+      pos: [W.x, W.y, W.z], right: W.x * right.x + W.y * right.y + W.z * right.z, flip: !!ch.flip !== (Math.cos(ch.yaw || 0) < 0),
       dist: camera.position.distanceTo(W), hpx: p.h * 1080, srcpx: m.stand_h, h: p.h, base: p.base });
   }
   let meshes = 0; scene.traverse(o => { if (o.isMesh && !planes.has(o)) { for (let p = o; p; p = p.parent) if (!p.visible) return; meshes += o.isInstancedMesh ? o.count : 1; } });
-  return { chars: out, post: { focus: v.focus ?? 0.5, band: v.band ?? 0.22, hblur: v.hblur ?? 0 }, meshes };
+  // check --layout 时由 voxel_dump.mjs 设 window.LAYOUT=1：多带一份碰撞体（俯视图 layout_map.py 画灰框用）
+  const colliders = window.LAYOUT ? collide.active().map(c => ({ id: c.id, kind: c.kind, shape: c.shape, box: c.box, ...(c.cyl ? { cyl: c.cyl } : {}) })) : [];
+  return { chars: out, post: { focus: v.focus ?? 0.5, band: v.band ?? 0.22, hblur: v.hblur ?? 0 }, meshes,
+    cam: camlib.last(),     // 运镜档（camera_check.py 的 K1–K6 用）：{pos, target, fov, moves, speed, fixed?}
+    colliders, nudges: window.NUDGES || [], stuck: window.STUCK || [] };
 }
 
 // 转场模式名 → 着色器编号（plan.json 里写名字）
-export const MODES = { rain: 1, whip_up: 5, through: 6, pullback: 7, crumble: 8, voxel: 10, rows: 11, whip: 12 };
-const KIND = { rain: 'wipe', whip_up: 'whip', through: 'through', pullback: 'through', crumble: 'wipe', voxel: 'dissolve', rows: 'slide', whip: 'whip' };
+export const MODES = { rain: 1, whip_up: 5, through: 6, pullback: 7, crumble: 8, voxel: 10, rows: 11, whip: 12,
+  flash: 13, dip: 14, iris: 15, match: 16, occlude: 17, glitch: 18, zoom_out: 19, spin: 20, leak: 21, split: 22, jump: 23 };
+const KIND = { rain: 'wipe', whip_up: 'whip', through: 'through', pullback: 'through', crumble: 'wipe', voxel: 'voxel', rows: 'slide', whip: 'whip',
+  flash: 'flash', dip: 'dip', iris: 'iris', match: 'match', occlude: 'wipe', glitch: 'glitch', zoom_out: 'through', spin: 'rotate', leak: 'leak', split: 'slide', jump: 'cut' };
+// 转场色默认值（cut.color 可覆盖）：闪白白、落色黑、遮挡深板、故障冷蓝、拉穿黑捏、光晕暖黄
+const TINT = { 13: '#ffffff', 14: '#000000', 17: '#14141c', 18: '#9db8ff', 19: '#000000', 21: '#ffd9a0' };
 
 export async function run(seg) {
   SEG = seg;
@@ -790,24 +953,32 @@ export async function run(seg) {
   const START = PLAN.start, END = PLAN.end;
   if (PLAN.tempo) { BEAT0 = PLAN.tempo.beat0; SPB = PLAN.tempo.spb; }
   if (PLAN.handoff_cards) Object.assign(HANDOFF, PLAN.handoff_cards);
-  PLAN.cuts ??= []; PLAN.incamera ??= []; PLAN.handoffs ??= []; PLAN.emotes ??= []; PLAN.tracks ??= {}; PLAN.shots ??= [];
+  PLAN.cuts ??= []; PLAN.incamera ??= []; PLAN.handoffs ??= []; PLAN.emotes ??= []; PLAN.tracks ??= {}; PLAN.shots ??= []; PLAN.touch ??= [];
   HAS_T2 = PLAN.handoffs.some(h => h.card === 'T2');
   CUTS = PLAN.cuts.map(k => ({ ...k, mode: MODES[k.mode] ?? k.mode }));
   LYR = await (await fetch('assets/lyrics.json')).json();
-  await Promise.all(PLAN.cast.map(name => {
-    const acts = new Set([...(PLAN.tracks[name] || []).filter(e => e[0] !== 'off').map(e => e[1]), ...((PLAN.extra_actions || {})[name] || [])]);
+  try { MOVES = await (await fetch('engine/moves.json')).json(); } catch (err) { MOVES = { slots: {}, phrases: {} }; }
+  Object.assign(MOVES.slots, PLAN.slots || {}); Object.assign(MOVES.phrases, PLAN.moves || {});
+  await Promise.all(PLAN.cast.map(async name => {
+    const tr = (PLAN.tracks[name] || []).filter(e => e[0] !== 'off'), dances = tr.filter(e => e[0] === 'dance');
+    const meta = dances.length ? await (await fetch(`assets/${name}/frames.json`)).json() : null;
+    const acts = new Set([...tr.filter(e => e[0] !== 'dance').map(e => e[1]), ...dances.flatMap(e => danceActs(meta, e[1])), ...((PLAN.extra_actions || {})[name] || [])]);
     const cards = new Set(PLAN.handoffs.map(h => h.card));
     if (name === 'zai' && cards.has('T3')) acts.add('walk_side');                          // T3 交接
     if ((name === 'zai' || name === 'qwen') && cards.has('T4')) acts.add('look_up');      // T4 交接
     return loadChar(name, acts);
   }));
+  collide.init(PLAN, scene, chars, grounds);   // 碰撞：plan.collide 配置 + 本帧场景收碰撞体
+  let TL = null;                                // 运镜库的 punch（on: 'hit'）读重击点/炸点；老项目没有这文件就退化到 f0 起跳
+  try { TL = await (await fetch('data/audio.timeline.json')).json(); } catch (err) { }
+  camlib.init(camera, PLAN, { FPS, beatOf, beatT: b => BEAT0 + b * SPB, hash, chars: () => chars, lookTarget: () => LOOK_T }, TL);
   if (seg.build) await seg.build();
   try { await document.fonts.load('58px "ZCOOL KuaiLe"', LYR.map(l => l.text).join('')); } catch (e) { }   // 字幕字体按字分包，先把用到的字载进来
   await document.fonts.ready;
   window.PLACEHOLDER = !!seg.placeholder;
   window.DUR = (END - START) / FPS;
   window.TRANSITIONS = [
-    ...PLAN.cuts.map(k => ({ from: k.from, to: k.to, t0: (k.c - k.len / 2 - START) / FPS, t1: (k.c + k.len / 2 - START) / FPS, key: (k.c - START) / FPS, kind: KIND[k.mode] || k.kind, note: k.note })),
+    ...PLAN.cuts.map(k => ({ from: k.from, to: k.to, t0: (k.c - k.len / 2 - START) / FPS, t1: (k.c + k.len / 2 - START) / FPS, key: (k.c - START) / FPS, kind: KIND[k.mode] || k.kind, mv: k.mode, dir: k.dir, note: k.note })),
     ...PLAN.incamera.map(k => ({ from: k.shot, to: k.shot, t0: (k.f0 - START) / FPS, t1: (k.f1 - START) / FPS, key: (k.key - START) / FPS, kind: 'incamera', note: k.note })),
     // 交接也是转场：入场、出场里画面有明显变化的都登记（T3 走出走入画框不算换画面，不登记）
     ...PLAN.handoffs.filter(h => h.kind).map(h => h.side === 'out'
@@ -819,6 +990,9 @@ export async function run(seg) {
   window.renderFrame = lf => { render(START + lf); return true; };
   window.probe = t => { const f = frameOf(t); setup(f, shotFrameFor(f)); return screenPoints().map(({ top, ...p }) => p); };
   window.voxelProbe = t => { const f = frameOf(t), sf = shotFrameFor(f), v = setup(f, sf); return { f, shot: shotOf(sf).id, cut: !!cutAt(f), ...voxelInfo(v) }; };
+  // 探针合并版：一次 setup 同时给动作关（probe）和体素关（voxelProbe）的数据，tools/probe_all.mjs 用（老引擎没有它就分别调两个）
+  window.probeAll = t => { const f = frameOf(t), sf = shotFrameFor(f), v = setup(f, sf), info = voxelInfo(v);
+    return { probe: screenPoints().map(({ top, ...p }) => p), voxel: { f, shot: shotOf(sf).id, cut: !!cutAt(f), ...info } }; };
   window.PLAN = PLAN;
   const q = new URLSearchParams(location.search);
   if (q.has('f')) render(+q.get('f'));

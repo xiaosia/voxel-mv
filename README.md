@@ -2,7 +2,7 @@
 
 **源码公开 · 非商业使用。** 自有代码采用 PolyForm Noncommercial 1.0.0，自有技能文档采用 CC BY-NC-SA 4.0。商业接单、广告、带货和以商业收益为目的的视频制作不在一般非商业授权范围内；标准许可中的明确允许用途仍然有效。第三方组件保留原许可，权属未核实的角色、图片和歌词不因放入仓库而获得新授权。详见 [中文许可说明](LICENSE.zh-CN.md)、[许可范围](LICENSE) 和 [第三方与素材清单](THIRD_PARTY_NOTICES.md)。
 
-把一首歌交给 AI，做成一支「摆在桌上的体素微缩世界」MV：three.js 实时渲染的方块小镇、房间、海底或一张唱片，sprite-frames 帧动画角色做成立牌站在里面，跟着拍子走、跳、做表情。画面是哑光圆角方块、柔和棚拍光、浅景深和移轴，像手办模型拍的小电影。
+把一首歌交给 AI，做成一支「摆在桌上的体素微缩世界」MV：three.js 实时渲染的方块小镇、房间、海底或一张唱片，精灵图帧动画角色做成立牌站在里面，跟着拍子走、跳、做表情。画面是哑光圆角方块、柔和棚拍光、浅景深和移轴，像手办模型拍的小电影。
 
 ![《雨爱》成片接触表](examples/yuai/preview/sheet.jpg)
 
@@ -26,7 +26,7 @@
 几个常用说法：
 
 - 「整首放在同一个世界里」——不换地点，靠时间、光色和镜头内的变化推进（场景表照样按 10–20 秒切）。
-- 「按照这首歌的感觉自由发挥」——打开自由模式，只有「不定格」这条硬关拦渲染。
+- 「按照这首歌的感觉自由发挥」——打开自由模式。所有检查照跑、照出报告；必过清单（11 条）两种模式都拦，`MODE` 只影响报告措辞。
 - 「这首太长了，拆成两段做」——AI 会按段落切开、分别渲染，最后拼回整首。
 
 画面上的小改动也可以直接说，比如「字幕换成米黄色、再靠下一点」「副歌主色换成青色」「转场别用甩镜」「最后一个镜头多停两拍」。AI 会去改对应的 `plan.json`、`shots.js` 或 `index.html`，再只重渲受影响的场景。
@@ -70,6 +70,7 @@ doctor 最后一行「显卡渲染」如果是 `[慢]`（SwiftShader 之类）�
 
 ```bash
 python tools/run.py doctor                 # 检查环境，第一次会装渲染依赖
+python tools/run.py preview                # 边做边看：浏览器里带音乐实时播放，改了文件自动刷新（不导出）
 python tools/run.py still 0.5 3.2 7.06     # 截图 → out/chk/t_<秒>.jpg
 python tools/run.py frame 120 340          # 按帧号截图
 python tools/run.py style 3.2 11 20        # 和参考图并排 → out/style_compare.jpg
@@ -122,7 +123,7 @@ python scripts/join_segments.py 成片.mp4 --audio 原曲.mp3 段1 段2 段3
 | 道具 | `engine/props.js` 或自己用 `R.box` / `R.rbox` 搭 | 现成有发光拼图和方块烟花；一件反复出现的道具比逐句插图更有记忆点。 |
 | 歌、拍点、段落 | `data/analysis/` + `scripts/analyze_audio.py` | 换歌基本等于重做；BPM 差一倍用 `--bpm` 重分析；长歌用 `--from` / `--seconds` 切段。 |
 | 渲染速度 | `VOXEL_WORKERS`、`draft`、`video --redo` | 并行浏览器 2–6 个；草稿 12fps 看节奏；改一个场景只重渲那一块。 |
-| 检查严格度 | 项目根的 `MODE` 写 `free` | 自由模式只拦「不定格」，其余检查照跑、照出报告。 |
+| 检查严格度 | 项目根的 `MODE` 写 `free` | 两种模式拦法一样：必过 11 条都拦，`MODE` 只影响报告措辞；其余分「自动修」和「警告」，见 `out/report.md`。 |
 
 ### 三个常见定制
 
@@ -142,7 +143,7 @@ python scripts/join_segments.py 成片.mp4 --audio 原曲.mp3 段1 段2 段3
 
 ```text
 voxel-mv/
-  SKILL.md / STYLE.md        流程与硬关 / 画风标准
+  SKILL.md / STYLE.md        流程与检查 / 画风标准
   scripts/                   建项目、分析音频、找歌词、拼接分段
   kit/engine/                引擎：渲染、角色、贴地、踩拍、转场、后期
   kit/tools/                 run.py 和各项检查

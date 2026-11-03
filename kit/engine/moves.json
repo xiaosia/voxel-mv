@@ -1,0 +1,47 @@
+{
+ "_说明": "舞句库（编舞层）。dance 动作轨条目 [\"dance\", 舞句, f0, f1, {mirror, canon, speed, size}] 按这里展开，一步 = 一拍。步的字段：a 动作（@开头是槽位，按 slots 里的顺序取角色有的第一个动作），i 帧序（从 0 数，负数从末尾数），i2 后半拍换成这一帧（八分音符），dx/dz 相对站位的偏移（身高的倍数，这一拍前 40% 滑过去），hop 跳起高度（身高的倍数，起跳在拍上、落地在下一拍），lean 倾斜（弧度，正数向左倒），turn 立牌翻面转身（这一拍前 35%），spin 原地转一圈（这一拍前 60%），sq 拍点重音（加大下蹲）。energy 1 小 / 2 中 / 3 大；people solo 单人也行，group 适合多人（配 canon/mirror）。项目里可以在 plan.json 的 moves 里加自己的舞句（同样格式，同名覆盖这里的）。",
+ "slots": {
+  "@clap":  ["dance_clap", "stream_clap", "pray"],
+  "@arms":  ["dance_arms", "stream_dance_hands", "wave_bye"],
+  "@step":  ["dance_step", "stream_dance_step", "walk_front"],
+  "@pose":  ["dance_pose", "reach_out"],
+  "@hip":   ["dance_hip", "stream_bounce", "idle"],
+  "@cheer": ["stream_bounce", "laugh"]
+ },
+ "phrases": {
+  "sway":        {"label": "左右摇摆", "energy": 1, "people": "group", "steps": [
+                   {"a": "idle", "i": 0, "lean": 0.12}, {"a": "idle", "i": 1, "lean": -0.12}, {"a": "idle", "i": 2, "lean": 0.12}, {"a": "idle", "i": 3, "lean": -0.12}]},
+  "side_tap":    {"label": "左右点步", "energy": 1, "people": "group", "steps": [
+                   {"a": "@step", "i": 0, "dx": -0.18}, {"a": "idle", "i": 1, "dx": -0.18, "sq": 0.6}, {"a": "@step", "i": 2, "dx": 0.18}, {"a": "idle", "i": 3, "dx": 0.18, "sq": 0.6}]},
+  "wave_beat":   {"label": "踩拍挥手", "energy": 1, "people": "group", "steps": [
+                   {"a": "wave_bye", "i": 1, "lean": 0.06}, {"a": "wave_bye", "i": 2, "lean": -0.06}, {"a": "wave_bye", "i": 1, "lean": 0.06}, {"a": "wave_bye", "i": 3, "lean": -0.06, "sq": 0.6}]},
+  "pray_rise":   {"label": "祈愿抬头", "energy": 1, "people": "solo", "steps": [
+                   {"a": "pray", "i": 0}, {"a": "pray", "i": 1}, {"a": "pray", "i": 3, "sq": 0.4}, {"a": "look_up", "i": -1, "lean": 0.05}]},
+  "bow_finish":  {"label": "谢幕鞠躬", "energy": 1, "people": "group", "steps": [
+                   {"a": "idle", "i": 0}, {"a": "bow", "i": 1}, {"a": "bow", "i": -2, "sq": 0.5}, {"a": "wave_bye", "i": 2}]},
+  "clap_step":   {"label": "拍手点步", "energy": 2, "people": "group", "steps": [
+                   {"a": "@clap", "i": 0, "i2": 2, "dx": -0.15}, {"a": "@clap", "i": 3, "i2": 1, "dx": -0.15, "sq": 0.7}, {"a": "@clap", "i": 0, "i2": 2, "dx": 0.15}, {"a": "@clap", "i": 3, "i2": 1, "dx": 0.15, "sq": 0.7}]},
+  "reach_hit":   {"label": "伸手定点", "energy": 2, "people": "group", "steps": [
+                   {"a": "reach_out", "i": 0}, {"a": "reach_out", "i": -1, "sq": 1.0}, {"a": "reach_out", "i": 0, "turn": true}, {"a": "reach_out", "i": -1, "sq": 1.0}]},
+  "turn_look":   {"label": "回身回眸", "energy": 2, "people": "solo", "steps": [
+                   {"a": "turn_back", "i": 0}, {"a": "turn_back", "i": 2}, {"a": "turn_back", "i": -1, "sq": 0.5}, {"a": "turn_back", "i": 0, "turn": true, "sq": 0.5}]},
+  "bounce":      {"label": "原地蹦", "energy": 2, "people": "group", "steps": [
+                   {"a": "@hip", "i": 0, "hop": 0.12}, {"a": "@hip", "i": 1, "hop": 0.12}, {"a": "@cheer", "i": 1, "hop": 0.18}, {"a": "@cheer", "i": 2, "sq": 0.8}]},
+  "groove":      {"label": "律动扭胯", "energy": 2, "people": "group", "steps": [
+                   {"a": "@hip", "i": 0, "i2": 2, "lean": 0.14, "dx": -0.06}, {"a": "@hip", "i": 1, "i2": 3, "lean": -0.14, "dx": 0.06}, {"a": "@hip", "i": 0, "i2": 2, "lean": 0.14, "dx": -0.06}, {"a": "@hip", "i": 1, "i2": 3, "lean": -0.14, "dx": 0.06, "sq": 0.8}]},
+  "slide_travel":{"label": "横移滑步", "energy": 2, "people": "group", "steps": [
+                   {"a": "walk_side", "i": 0, "dx": 0.4}, {"a": "walk_side", "i": 4, "dx": 0.8}, {"a": "@pose", "i": -1, "dx": 0.8, "turn": true, "sq": 0.8}, {"a": "walk_side", "i": 0, "dx": 0.4},
+                   {"a": "walk_side", "i": 4, "dx": 0.0}, {"a": "@pose", "i": -1, "dx": 0.0, "turn": true, "sq": 0.8}, {"a": "idle", "i": 0}, {"a": "@pose", "i": -1, "sq": 1.0}]},
+  "cheer_jump":  {"label": "欢呼跳", "energy": 3, "people": "group", "steps": [
+                   {"a": "@cheer", "i": 1, "hop": 0.22}, {"a": "@cheer", "i": 2, "hop": 0.22}, {"a": "reach_out", "i": -1, "hop": 0.32, "lean": -0.08}, {"a": "@cheer", "i": 0, "sq": 1.0}]},
+  "spin_pose":   {"label": "转圈亮相", "energy": 3, "people": "group", "steps": [
+                   {"a": "idle", "i": 0, "sq": 0.6}, {"a": "@step", "i": 1, "spin": true, "hop": 0.1}, {"a": "@pose", "i": -1, "sq": 1.0, "lean": -0.1}, {"a": "@pose", "i": -1, "lean": 0.1}]},
+  "punch_up":    {"label": "举手冲拍", "energy": 3, "people": "group", "steps": [
+                   {"a": "reach_out", "i": -1, "hop": 0.25, "lean": -0.12}, {"a": "idle", "i": 0, "sq": 0.8}, {"a": "reach_out", "i": -1, "hop": 0.25, "lean": 0.12, "turn": true}, {"a": "@cheer", "i": 2, "sq": 0.8, "turn": true}]},
+  "arms_wave":   {"label": "举手左右摆", "energy": 3, "people": "group", "steps": [
+                   {"a": "@arms", "i": 0, "lean": 0.1, "dx": -0.1}, {"a": "@arms", "i": 1, "lean": -0.1, "dx": 0.1, "sq": 0.6}, {"a": "@arms", "i": 2, "lean": 0.1, "dx": -0.1}, {"a": "@arms", "i": 3, "lean": -0.1, "dx": 0.1, "sq": 0.8}]},
+  "step_combo":  {"label": "踏步组合", "energy": 3, "people": "group", "steps": [
+                   {"a": "@step", "i": 0, "dx": -0.2}, {"a": "@step", "i": 2, "dx": 0.2}, {"a": "@clap", "i": 3, "sq": 0.8}, {"a": "@clap", "i": 0, "i2": 3},
+                   {"a": "@arms", "i": 1, "lean": 0.1}, {"a": "@arms", "i": 3, "lean": -0.1}, {"a": "@step", "i": 1, "spin": true}, {"a": "@pose", "i": -1, "sq": 1.0}]}
+ }
+}

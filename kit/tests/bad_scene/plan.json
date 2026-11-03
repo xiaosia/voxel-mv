@@ -1,0 +1,27 @@
+{
+ "segment": "T",
+ "maker": "selftest",
+ "start": 0,
+ "end": 730,
+ "tempo": {"spb": 0.5, "beat0": 0},
+ "scenes": [
+   {"id": "S01", "f0": 5, "f1": 100, "world": "雨天小镇", "look": "灰蓝"},
+   {"id": "S02", "f0": 110, "f1": 730, "world": "星空海面", "look": "深蓝"}
+ ],
+ "cuts": [
+   {"c": 37, "len": 300, "mode": "rain"},
+   {"c": 102, "len": 12, "mode": "rows"}
+ ],
+ "emotes": [
+   {"who": "a", "g": "❤", "f0": 50}
+ ],
+ "tracks": {
+   "a": [["dance", "d1", 14, null]]
+ },
+ "allow": [
+   {"rule": "collide", "who": "a", "f0": 200, "f1": 210, "why": "故意写错时间的豁免（自检用：STUCK 在 20–28，这条盖不住，照样要 FAIL）"}
+ ],
+ "occlude": [
+   {"who": "c", "f0": 60, "f1": 70, "by": "长凳", "why": "旧写法，等 autofix 迁移成 allow"}
+ ]
+}
