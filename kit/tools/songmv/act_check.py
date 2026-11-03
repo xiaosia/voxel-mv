@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Do the characters actually move, and with the music? Reads out/probe.json (from render.sh act), data/lines.json,
-data/audio.timeline.json and, if present, ACTIONS.json. Writes out/act_check.md and out/act_check.png.
-Usage: python3 act_check.py <project_dir> [--mode safe|free]
-Mode: --mode, else the first word of <project>/MODE, else safe. safe: exit 3 when a gate fails (render.sh video stops).
-free: same report, exit 0.
+data/audio.timeline.json and, if present, ACTIONS.json. Writes out/act_check.md, out/act_check.json and out/act_check.png.
+Usage: python3 act_check.py <project_dir> [--mode safe|free] [--json]
+Mode: --mode, else the first word of <project>/MODE. Only affects wording now: 必过 gates block in both modes.
 
 Only body motion counts: every key point (head, hands, feet) is taken relative to the character's own root and divided
 by its height h, so camera moves, zooms and whole-body slides do not count. Art style plays no part.
@@ -17,11 +16,12 @@ A character counts as on screen when its root is inside the frame and h >= 12 % 
                  better one), per line, averaged over the lines by time on screen. Hitting on beats and landing on
                  beats both count. Rough values: pop on the beat 0.8, eased move beat to beat 0.6, eased move every
                  2 beats 0.6, smooth walk with steps on the beats 0.33, idle sway / free sine motion under 0.15.
-Safe-mode gates, for each character while on screen:
-  G1  at least 1 clear action in every 2-bar window it is on screen for >= half of
-  G2  no more than 4 still beats in a row
-  G3  sync >= 0.25 over the film (and, advisory, per line)
+Gates, for each character while on screen:
+  G1  at least 1 clear action in every 2-bar window it is on screen for >= half of 【必过】
+  G2  no more than 4 still beats in a row 【必过】
+  G3  sync >= 0.25 over the film (and, advisory, per line) 【警告】
   G4  ACTIONS.json exists, and each planned action shows a clear action of that character within 1 beat of its time
+      【自动修：重跑 make_actions / 改 tracks 后复判】
 ACTIONS.json: {"actions": [{"line": "L03", "who": "me", "beat": 27, "act": "挥手"}, ...],
                "holds":   [{"who": "you", "from": 50.4, "to": 53.5, "why": "最后一个画面停住看烟花"}]}
   "beat" = index into beat_times (or "t" in seconds); "who" = the id the page gives to mark().
@@ -30,14 +30,16 @@ ACTIONS.json: {"actions": [{"line": "L03", "who": "me", "beat": 27, "act": "挥�
 import json, os, sys, math
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import checks_common as CC
 if hasattr(sys.stdout, 'reconfigure'): sys.stdout.reconfigure(encoding='utf-8', errors='replace'); sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 
 args = sys.argv[1:]; mode = None
 if '--mode' in args: i = args.index('--mode'); mode = args[i + 1]; del args[i:i + 2]
+JSON_ONLY = '--json' in args
 P = args[0] if args else '.'
 if not mode:
     mf = os.path.join(P, 'MODE'); mode = (open(mf, encoding='utf-8').read().split() or ['safe'])[0] if os.path.exists(mf) else 'safe'
-SAFE = mode != 'free'
 MIN_H, STILL, ACT, ACT_WIN, MAX_STILL, SYNC_MIN = .12, .04, .15, 1.0, 4, .15
 KEYS = ['head', 'handL', 'handR', 'footL', 'footR']
 
@@ -155,7 +157,7 @@ for a in plan:
     if not ok: plan_fail.append(row)
 
 # ---------- report ----------
-fails, out = [], ['# act check\n', f'mode: **{"safe (gates block the render)" if SAFE else "free (advisory)"}**  ·  characters: {", ".join(ids) or "none"}\n']
+out, RULES = ['# act check\n', f'mode: **{mode}**（只影响措辞）  ·  characters: {", ".join(ids) or "none"}\n'], []
 if not ids: out.append('No character was marked in any frame. If the film has characters, call mark() where they are drawn (SKILL.md).\n')
 out.append('## per line\n\n| line | text | ' + ' | '.join(f'{c}: on / actions / longest still / sync' for c in ids) + ' |\n|---|---|' + '---|' * len(ids))
 for l in L:
@@ -182,22 +184,34 @@ for c in ids:
                ('' if g1 else ' — no action in ' + ', '.join(f'{a:.1f}–{b:.1f}s' for a, b in empty)))
     n, k0 = r['worst']; g2 = n <= MAX_STILL
     out.append(f'  - G2 longest still: {n} beats' + (f' (from {beats[k0]:.1f}s)' if n else '') + f' {"PASS" if g2 else "FAIL"}')
-    s = r['sync'](r['vis']); g3 = s is None or s >= SYNC_MIN
+    s = r['sync'](r['vis']); g3 = bool(s is None or s >= SYNC_MIN)
     out.append(f'  - G3 sync: {"–" if s is None else f"{s:.2f}"} {"PASS" if g3 else "FAIL"}')
-    for g, name in ((g1, 'G1'), (g2, 'G2'), (g3, 'G3')):
-        if not g: fails.append(f'{c} {name}')
+    RULES.append({'rule': 'G1', 'name': f'{c} 每两小节有动作', 'ok': g1,
+                  'detail': (f'{len(r["wins"]) - len(empty)}/{len(r["wins"])} 个两小节窗口有动作' + ('；空窗 ' + ', '.join(f'{a:.1f}–{b:.1f}s' for a, b in empty[:4]) if empty else '')) if r['wins'] else '没有在屏 ≥ 半程的两小节窗口'})
+    RULES.append({'rule': 'G2', 'name': f'{c} 不长静止', 'ok': g2, 'detail': f'最长静止 {n} 拍（上限 {MAX_STILL}）' + (f'，从 {beats[k0]:.1f}s 起' if n else '')})
+    RULES.append({'rule': 'G3', 'name': f'{c} 卡拍', 'ok': g3, 'detail': '量不出（动作太少）' if s is None else f'sync {s:.2f}（下限 {SYNC_MIN}）'})
 if ids:
-    if plan_note: out.append(f'- G4 action plan: FAIL ({plan_note})'); fails.append('G4')
+    if plan_note:
+        out.append(f'- G4 action plan: FAIL ({plan_note})')
+        RULES.append({'rule': 'G4', 'name': '计划动作兑现', 'ok': False, 'detail': plan_note})
     else:
-        out.append(f'- G4 action plan: {"PASS" if not plan_fail else "FAIL"} ({len(plan_rows) - len(plan_fail)}/{len(plan_rows)} planned actions seen)')
-        if plan_fail: fails.append('G4')
+        ok4 = not plan_fail
+        out.append(f'- G4 action plan: {"PASS" if ok4 else "FAIL"} ({len(plan_rows) - len(plan_fail)}/{len(plan_rows)} planned actions seen)')
+        RULES.append({'rule': 'G4', 'name': '计划动作兑现', 'ok': ok4, 'detail': f'{len(plan_rows) - len(plan_fail)}/{len(plan_rows)} 个计划动作在 ±1 拍内看到' + ('；缺的见下表' if plan_fail else '')})
     if plan_rows:
         out.append('\n| line | who | beat | t | action | seen |\n|---|---|---|---|---|---|')
         out += ['| ' + ' | '.join(map(str, r)) + ' |' for r in plan_rows]
 out.append('\nRead with out/act_check.png: each character\'s body speed, beats as ticks, clear actions as dots, '
            'still beats in grey, 2-bar windows with no action in red.')
-out.append(f'\n**{"FAIL: " + ", ".join(fails) if fails else "PASS"}**' + (' (free mode: advisory)' if fails and not SAFE else ''))
+for r in RULES: r.setdefault('tier', CC.tier(r['rule']))
+tiers = {'must': 0, 'auto': 0, 'warn': 0}
+for r in RULES:
+    if not r['ok']: tiers[r['tier']] += 1
+out += ['', '## rule table', '', '| rule | 档 | 结果 | 说明 |', '|---|---|---|---|']
+out += ['| %s %s | %s | %s | %s |' % (r['rule'], r['name'], CC.CN[r['tier']], 'PASS' if r['ok'] else '**FAIL**', r['detail'][:150]) for r in RULES]
+out.append(f'\n**{"PASS" if tiers["must"] == 0 else "FAIL"}**（没过：必过 {tiers["must"]}，自动修 {tiers["auto"]}，警告 {tiers["warn"]}）')
 open(os.path.join(P, 'out/act_check.md'), 'w', encoding='utf-8').write('\n'.join(out) + '\n')
+pj = CC.dump_json('act_check', RULES, os.path.join(P, 'out'))
 
 # ---------- plot ----------
 ROW, PXS, LH = 15.0, 110, 90
@@ -228,5 +242,6 @@ for rw in range(rows):
             if t0 <= e < t0 + ROW: d.ellipse([x(e) - 4, yb - LH + 10, x(e) + 4, yb - LH + 18], fill=col)
         d.line([(70, yb), (Wd - 10, yb)], fill=(0, 0, 0))
 im.save(os.path.join(P, 'out/act_check.png'))
-print('\n'.join(out[-1:]), '-> out/act_check.md, out/act_check.png')
-sys.exit(3 if fails and SAFE else 0)
+if not JSON_ONLY:
+    print('\n'.join(out[-2:]), f'-> out/act_check.md, {pj}, out/act_check.png')
+sys.exit(CC.exit_code(RULES))

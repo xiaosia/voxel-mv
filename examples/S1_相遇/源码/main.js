@@ -375,6 +375,10 @@ function setSky(c, fogNear = 30, fogFar = 120) {
 }
 function keyAt(x, y, z, color = 0xfff0dc, intensity = 2.4) { key.position.set(x - 7, y + 12, z + 9); key.target.position.set(x, y, z); key.color.set(color); key.intensity = intensity; }
 function look(px, py, pz, tx, ty, tz) { camera.position.set(px, py, pz); camera.lookAt(tx, ty, tz); }
+// 运镜示范（第 4 批）：S1-01/03 慢推、S1-02 跟移、S1-05 升降、S1-06 环绕、S1-07 手持、S1-09 推近+变焦、S1-10 打点冲击。
+// 新项目别手写这些：plan.json 的 camera 轨（tools/run.py camplan 起草）或 setupShot 里 R.cam.*，安全线自动夹。
+const BASE_FOV = 28;
+function fovPunch(f, f0, amt = 0.12) { camera.fov = BASE_FOV * (1 - amt * Math.exp(-Math.max(0, f - f0) / 3)); camera.updateProjectionMatrix(); }
 function rainAt(t, cx, cz, amount) {
   const n = Math.floor(RAIN_N * amount);
   for (let i = 0; i < RAIN_N; i++) {
@@ -417,6 +421,7 @@ let curT = 0;
 function setupShot(f, sf) { const v = setupShot0(f, sf); faceCamera(); return v; }
 function setupShot0(f, sf) {
   const t = f / FPS; curT = t;
+  camera.fov = BASE_FOV; camera.updateProjectionMatrix();   // fov 每帧复位，写运镜的镜头自己再改（和引擎 camera.js 同一规矩）
   [C, D].forEach(ch => ch.root.visible = false);
   crowd.forEach(g => g.visible = false);
   rainAt(t, 0, 0, 0); hideFX();
@@ -519,8 +524,9 @@ function setupShot0(f, sf) {
       [C, D].forEach(ch => ch.mat.color.setRGB(1, 0.95, 0.9));
       // wave splash on the bar line
       burst(splash, 60, f, 331, X + 2.5, 0.3, -3.6, 2.2, 6, () => 0xffffff);
-    } else { // S1-06 close two-shot, laughing; DeepSeek hops closer on 412
-      look(X - 1.0, 1.75, 3.2, X - 1.0, 1.25, -5);
+    } else { // S1-06 close two-shot, laughing; DeepSeek hops closer on 412; slow orbit around the couple
+      const oa = THREE.MathUtils.degToRad(lerp(-14, 14, easeIO((f - 371) / 82)));
+      look(X - 1.0 + Math.sin(oa) * 8.2, 1.75, -5 + Math.cos(oa) * 8.2, X - 1.0, 1.25, -5);
       const hopK = smooth(412, 426, f);
       const hop = (f >= 412 && f < 433) ? Math.sin((f - 412) / 21 * Math.PI) * 0.35 : 0;
       pose(C, 'laugh', loopIdx(C, 'laugh', t, 1), X - 0.15, 0.49, -4.9, { breath: breath(t), tint: [1, 0.95, 0.9] });
@@ -536,7 +542,9 @@ function setupShot0(f, sf) {
       hemi.color.set(0xc9c9db); hemi.intensity = 0.95;
       keyAt(X, 0, 0, 0xdfe0ee, 1.2);
       updateSea(sea2, t, new THREE.Color(0x3f4d6e), new THREE.Color(0x7d8aa6), 0.35);
-      look(X + 0.4, 2.2, 8.6, X, 1.35, 0);
+      const hx = Math.sin(t * 2.1) * 0.5 + Math.sin(t * 5.3 + 1.7) * 0.3 + Math.sin(t * 9.7 + 3.1) * 0.2;   // handheld（引擎里 R.cam.handheld）
+      const hy = Math.sin(t * 1.7 + 2.3) * 0.5 + Math.sin(t * 4.9 + 4.1) * 0.3;
+      look(X + 0.4 + hx * 0.05, 2.2 + hy * 0.05, 8.6, X, 1.35, 0);
       const lean = smooth(494, 504, f) * 0.14;
       const tint = [0.86, 0.86, 0.92];
       if (f < 466) pose(D, 'sit_idle', loopIdx(D, 'sit_idle', t, 1), X - 0.65, 0.8, 0.5, { tint });
@@ -575,9 +583,10 @@ function setupShot0(f, sf) {
     keyAt(X, 0, 0, 0xffdcae, 2.6);
     updateSea(sea3, t, new THREE.Color(0x4f86c0), new THREE.Color(0xb5e2ef), 0.2);
     puzzle.visible = true;
-    if (sf < 678) { // S1-09 pick up the first piece together
+    if (sf < 678) { // S1-09 pick up the first piece together; dollyzoom (推近同时放宽 fov，纵深感被拉开)
       const k = easeIO((f - 617) / 60);
       look(X, lerp(1.9, 1.35, k), lerp(7.6, 4.6, k), X, lerp(0.9, 0.85, k), 0);
+      camera.fov = lerp(BASE_FOV, BASE_FOV + 6, k); camera.updateProjectionMatrix();
       const pk = f < 637 ? 1 : f < 658 ? 2 : 3;   // bend on 617, crouch on 637, lift the piece on the 658 bar line
       pose(C, 'pick_up', pk, X + 0.75, 0, 0.1);
       pose(D, 'pick_up', pk, X - 0.75, 0, 0.1, { flip: true });
@@ -592,8 +601,9 @@ function setupShot0(f, sf) {
         fr.m.position.set(fr.x0 + a * a * (6 + hash(j) * 6), fr.y0 + a * (1 + hash(j + 2) * 2), fr.z0 - a * 1.5);
         fr.m.rotation.set(a * 6, a * 4, 0); fr.m.visible = a < 1;
       });
-    } else { // S1-10 hand-over → warm white (T1)
+    } else { // S1-10 hand-over → warm white (T1); fov punch on the beat the puzzle changes hands
       look(X, 1.25, 3.0, X, 1.05, 0);
+      fovPunch(f, 678, 0.12);
       pose(C, 'reach_out', 3, X + 0.62, 0, 0.1, { flip: true });
       pose(D, 'reach_out', onceIdx(D, 'reach_out', f, 678, 684), X - 0.62, 0, 0.1);
       const p = easeIO((f - 678) / 6);

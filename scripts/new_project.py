@@ -12,13 +12,18 @@
   --cast     用哪些角色，名字是角色目录下的文件夹名（默认在 $SKILL/characters/ 里找）
   --lead     主角（默认 cast 的第一个）
   --seconds  只做多少秒（试做、测试用；默认到歌尾）
+  --new-moves N   新舞步预算：最多给角色新出几个舞步动作（默认 0 = 只用现有帧编舞，不出新图；最多 4 = 每人 1 张图）。
+                  > 0 时会打印预计出图张数，先告诉用户、等用户同意再出（见 SKILL.md「编舞」）
+  --new-moves-cast 只给这几个角色出新舞步（默认主角）
   --from     从第几秒开始（多段接力时做其中一段，见 references/relay.md；页面里仍然用全曲时间）
-角色目录的格式见 $SKILL/characters/README.md（sprite-frames 技能的产出：frames.json + frames/<动作>/NN.png）。
+角色目录的格式见 $SKILL/characters/README.md（参考精灵图生成的帧动画：frames.json + frames/<动作>/NN.png）。
 做完后：cd <项目目录>，python tools/run.py doctor，然后 python tools/run.py still 1 5 看占位画面。"""
 import argparse, json, os, shutil, subprocess, sys
 if hasattr(sys.stdout, 'reconfigure'): sys.stdout.reconfigure(encoding='utf-8', errors='replace'); sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 os.environ['PYTHONUTF8'] = '1'; os.environ['PYTHONIOENCODING'] = 'utf-8'   # 子脚本读写文件、打印中文都用 UTF-8（中文 Windows 默认是 GBK）
 HERE = os.path.dirname(os.path.abspath(__file__)); SKILL = os.path.dirname(HERE); KIT = os.path.join(SKILL, 'kit')
+sys.path.insert(0, os.path.join(KIT, 'tools'))
+import engine_dist
 ap = argparse.ArgumentParser(); ap.add_argument('project')
 ap.add_argument('--audio', required=True); ap.add_argument('--timeline')
 ap.add_argument('--lrc'); ap.add_argument('--report'); ap.add_argument('--no-lyrics', action='store_true')
@@ -27,6 +32,7 @@ ap.add_argument('--lyrics', help='歌词文字（纯文本一行一句，或别�
 ap.add_argument('--cast', required=True); ap.add_argument('--lead'); ap.add_argument('--name', default='MV')
 ap.add_argument('--chars', default=os.path.join(SKILL, 'characters')); ap.add_argument('--seconds', type=float)
 ap.add_argument('--from', dest='frm', type=float, default=0.0)
+ap.add_argument('--new-moves', type=int, default=0); ap.add_argument('--new-moves-cast')
 A = ap.parse_args()
 P = os.path.abspath(A.project); os.makedirs(P, exist_ok=True)
 if not os.path.exists(A.audio): sys.exit(f'找不到音频文件：{A.audio}')
@@ -43,6 +49,7 @@ for notice in ('LICENSE', 'LICENSE.zh-CN.md', 'THIRD_PARTY_NOTICES.md'):
 shutil.copytree(os.path.join(SKILL, 'LICENSES'), os.path.join(P, 'LICENSES'), dirs_exist_ok=True)
 for d in ('engine', 'vendor', 'tools'):
     shutil.copytree(os.path.join(KIT, d), os.path.join(P, d), dirs_exist_ok=True, ignore=shutil.ignore_patterns('node_modules', '__pycache__'))
+engine_dist.write_version(os.path.join(P, 'engine'), SKILL)   # 引擎版本 + 每个文件的 sha256，run.py 校验/升级用
 for f, dst in (('index.html', 'index.html'), ('shots_placeholder.js', 'shots.js')):
     if not os.path.exists(os.path.join(P, dst)): shutil.copy(os.path.join(KIT, f), os.path.join(P, dst))
 shutil.copytree(os.path.join(SKILL, 'references/style'), os.path.join(P, 'ref/style'), dirs_exist_ok=True)
@@ -156,7 +163,8 @@ if not os.path.exists(pp):
             'tempo': {'beat0': round(beat0, 4), 'spb': round(spb, 4)}, 'cast': cast,
             'scenes': [], 'shots': [], 'cuts': [], 'incamera': [], 'handoffs': [], 'emotes': [], 'events': [],
             'tracks': {c: [] for c in cast}, 'extra_actions': {c: ['idle'] for c in cast},
-            'sizes': {}, 'occlude': [], 'treadmill': []}
+            'sizes': {}, 'occlude': [], 'treadmill': [],
+            'choreo': {'new_moves': max(0, min(4, A.new_moves)), 'new_moves_cast': [c.strip() for c in (A.new_moves_cast or A.lead or cast[0]).split(',') if c.strip()] if A.new_moves > 0 else [], 'why': {}}}
     json.dump(plan, open(pp, 'w', encoding='utf-8'), ensure_ascii=False, indent=1)
 json.dump({'note': '由 plan.json 的动作轨生成（python tools/run.py actions）', 'actions': [], 'subtle': []},
           open(os.path.join(P, 'ACTIONS.json'), 'w', encoding='utf-8'), ensure_ascii=False, indent=1) if not os.path.exists(os.path.join(P, 'ACTIONS.json')) else None
@@ -177,4 +185,13 @@ if os.path.exists(os.path.join(D, 'structure.json')):
     ST = json.load(open(os.path.join(D, 'structure.json'), encoding='utf-8'))
     print(('本段' if OFF or A.seconds else '这首歌') + '的段落：' + ' → '.join(p['name'] for p in ST['parts']) +
           ('（已人工校对）' if ST.get('checked') else '（自动识别，看 data/structure.md 核对；改 data/analysis/structure.json 后标 checked、用 --structure 重建）'))
+NM = max(0, min(4, A.new_moves))
+if A.new_moves > 4: print('注意：--new-moves 最多 4（每人 1 张图），已按 4 算')
+if NM:
+    nmc = [c.strip() for c in (A.new_moves_cast or A.lead or cast[0]).split(',') if c.strip()]
+    have = {c: [a for a in json.load(open(os.path.join(P, 'assets', c, 'frames.json'), encoding='utf-8'))['actions'] if a.startswith('dance_')] for c in nmc if os.path.exists(os.path.join(P, 'assets', c, 'frames.json'))}
+    need = [c for c in nmc if len(have.get(c, [])) < NM]
+    print(f'新舞步预算：{NM} 个动作 × {len(nmc)} 人（{", ".join(nmc)}）。' + (f'已经有了的：{", ".join(f"{c} {len(v)} 个" for c, v in have.items() if v)}。' if any(have.values()) else '') +
+          (f'要出图的 {len(need)} 人：每人 1 张 4×4 精灵图（参考角色精灵图生成 {NM} 个舞步的帧动画），预计 {len(need)} 张，'
+           f'按平均重出 1 次算约 {2 * len(need)} 张，最多 {4 * len(need)} 张（每张最多重出 3 次）。先把这个数告诉用户，同意了再出；出不来就用现有帧的舞句，不卡住。' if need else '都已经有了，不用出图。'))
 print('下一步：cd 进项目，python tools/run.py doctor，再 python tools/run.py still 1 5 看占位画面能不能出图。')

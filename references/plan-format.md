@@ -11,16 +11,21 @@
 | `cast` | 引擎 | 出场角色（`assets/` 下的文件夹名），只加载这些 |
 | `scenes` | 场景关 | `[{id, f0, f1, world, look, why?, same_as?}]`：全片的场景表，从 `start` 连到 `end`。一个场景 = 一套布景（地点 + 光色），10–20 秒左右；`why` 写故意短于 8 秒的原因，`same_as` 标故意回到的前一个场景 |
 | `shots` | 引擎、你 | `[{id, f0, f1, lyric?, camera?, need?, …}]`，`R.shotOf(sf)` 按帧找镜头；除 id/f0/f1 外的字段随你写（分镜笔记） |
-| `cuts` | 引擎、转场关 | 镜头之间的转场，见 engine.md |
+| `cuts` | 引擎、转场关 | 镜头之间的转场 `{c, len, mode, from, to, note, glowAmt?, center?, grid?, color?, dir?, match?}`：19 种 mode 按轻重分两档（炸点上必须用重的），`c` 要正好在场景边界上；轻重表和参数见 engine.md「转场」 |
 | `incamera` | 转场关 | 镜头内的大变化 `{shot, f0, f1, key, note}` |
 | `emotes` | 引擎、体素关 V7 | 表情符号 `{who, g, f0, f1, dx}` |
 | `grade`、`grade_why` | 引擎、调色关 | 按段落 / 场景变的色调，见下面「grade」；`grade_why` 是 `{"L4 P06": "原因"}`，故意不按常见走法来时写 |
 | `events` | 钩子关 | `[{f, what}]`：动作轨、转场、表情以外的画面事件（镜头揭示、片名出现、道具亮起、新东西入画），开场 5 秒、没词的长段、人声进来那一拍靠它们和动作、转场一起过钩子关。登记了就要真的做出来 |
 | `tracks` | 引擎、动作关 | 动作轨，见 engine.md |
+| `moves`、`slots` | 引擎、舞步关 | 自己加的舞句和槽位（格式同 `engine/moves.json`，同名覆盖库里的） |
+| `choreo` | 舞步关、建项目 | `{new_moves, new_moves_cast, why}`：新舞步预算（最多新增几个 `dance_` 动作，`--new-moves` 写入，默认 0）、给谁出、故意不跳的原因 `{"D0 副歌2": "…"}` |
 | `extra_actions` | 引擎 | `{名字: [动作…]}`：轨里没有、但要手动 `pose` 的动作 |
 | `sizes` | 体素关 V1 | `{名字: {scale, why}}`：故意放大缩小的角色（巨人、远处的倒影） |
-| `occlude` | 体素关 V2 | `[{who, f0, f1, why}]`：故意让脚被挡住（站在草丛里、躲在墙后） |
+| `occlude` | 体素关 V2 | `[{who, f0, f1, why}]`：故意让脚被挡住（站在草丛里、躲在墙后）。旧写法，还认；新写法用下面的 `allow` |
+| `allow` | 体素关 STUCK / V2 | `[{rule, who, f0, f1, why}]`：按时间段的豁免清单，目前 `rule: "collide"`（管 STUCK 推不开和 V2 被挡）；`who` 写 `"*"` 对所有角色生效。豁免按帧算：时间段没盖住实际冲突的那几帧照样 FAIL，报告会提示「没盖住实际冲突（时间写错了？）」 |
 | `treadmill` | 体素关 V3 | `[{who, f0, f1, why}]`：故意原地走（跑步机、梦里走不动） |
+| `camera` | 引擎、运镜关 | 运镜轨，见 engine.md「运镜」：`[{f0, f1, move, …}]`，move 是 dolly/truck/crane/pan/tilt/orbit/zoom/dollyzoom/roll/follow 或叠加层 handheld/punch/bob。不写这条轨、setupShot 里也不调 `R.cam.*` 的话，画面和没有运镜库时逐帧一致 |
+| `camera_why` | 运镜关 K5 | `[{f0, f1, why}]`：连续 2 小节以上的定机位写理由（结尾定格、故意静止的凝视），运镜关就不拦 |
 | `handoffs`、`handoff_cards` | 接力 | 见 relay.md；单曲 MV 留空 |
 
 `ACTIONS.json` 由 `python tools/run.py actions` 从 `tracks` 生成；想要静止的地方在里面加 `holds: [{who, from, to, why}]`（秒，项目本地时间）。

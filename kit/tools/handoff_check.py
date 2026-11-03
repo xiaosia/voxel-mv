@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
 """交接自查（交接卡 T1–T6 + 片头片尾 + 成片规格）。
-用法：python tools/handoff_check.py --segment S3 --video out/S3_Gemini.mp4 [--project .]
+用法：python tools/handoff_check.py --segment S3 --video out/S3_Gemini.mp4 [--project .] [--json]
 读：plan.json（段起止帧、交接）、out/probe.json（tools/run.py 的动作关会生成；T3、T4 要用）、shots.js（是否还是占位场景）。
-写：out/checks/handoff_check.md、out/handoff.json（切点前后各 6 帧的 probe 记录和测量值）、out/first3/、out/last3/。
-全部 PASS 退出码 0，有 FAIL 退出码 1。"""
+写：out/checks/handoff_check.md、out/handoff.json（切点前后各 6 帧的 probe 记录和测量值）、out/first3/、out/last3/、
+    out/handoff_check.json（结构化结果，report.py 汇总）。
+全部检查聚合成一条 HANDOFF（必过档，三档制下两种模式都拦）：有 FAIL 退出码 3。"""
 import argparse, json, os, subprocess, sys
 import numpy as np
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import checks_common as CC
 if hasattr(sys.stdout, 'reconfigure'): sys.stdout.reconfigure(encoding='utf-8', errors='replace'); sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 
 ap = argparse.ArgumentParser()
 ap.add_argument('--segment', required=True); ap.add_argument('--video', required=True); ap.add_argument('--project', default='.')
+ap.add_argument('--json', action='store_true', help='只写 md/json 报告，不打控制台')
 A = ap.parse_args()
 P = os.path.abspath(A.project)
 plan = json.load(open(os.path.join(P, 'plan.json'), encoding='utf-8'))
@@ -96,7 +100,7 @@ def rec(k0, k1, name):
 
 # ---------- 交接 ----------
 os.makedirs(os.path.join(P, 'out/checks'), exist_ok=True)
-for h in plan['handoffs']:
+for h in plan.get('handoffs') or []:
     side, card = h['side'], h['card']
     tag = f'{card} {"入场" if side == "in" else "出场"}'
     if card == 'T1':
@@ -173,8 +177,15 @@ for d, ks in (('first3', [0, 1, 2]), ('last3', [-3, -2, -1])):
     for k in ks: Image.fromarray(frame(k)).save(os.path.join(P, 'out', d, f'{START + k % N:04d}.png'))
 
 json.dump(data, open(os.path.join(P, 'out/handoff.json'), 'w', encoding='utf-8'), ensure_ascii=False, indent=1)
-md = [f'# 交接自查 {A.segment}（{os.path.basename(A.video)}）', '', '| 项 | 结果 | 详情 |', '|---|---|---|'] + rows
+bad = [k for k, v in data['checks'].items() if not v['pass']]
+RULES = [{'rule': 'HANDOFF', 'name': '交接卡全对', 'ok': not bad,
+          'detail': '；'.join(f'{k}：{data["checks"][k]["detail"]}' for k in bad[:6]) + ('…' if len(bad) > 6 else '') or f'{len(data["checks"])} 项全对'}]
+for r in RULES: r.setdefault('tier', CC.tier(r['rule']))
+md = [f'# 交接自查 {A.segment}（{os.path.basename(A.video)}）', '',
+      '必过档：HANDOFF（全部子项必须全对，两种模式都拦）', '', '| 项 | 结果 | 详情 |', '|---|---|---|'] + rows
 md += ['', '**全部 PASS**' if not fails else f'**{fails} 项 FAIL**：按详情改到 PASS 再交付。']
 open(os.path.join(P, 'out/checks/handoff_check.md'), 'w', encoding='utf-8').write('\n'.join(md) + '\n')
-print('\n'.join(md))
-sys.exit(1 if fails else 0)
+pj = CC.dump_json('handoff_check', RULES, os.path.join(P, 'out'))
+if not A.json: print('\n'.join(md))
+print(f"-> out/checks/handoff_check.md, {pj}  {'PASS' if not bad else f'HANDOFF FAIL（{len(bad)} 项）'}")
+sys.exit(CC.exit_code(RULES))

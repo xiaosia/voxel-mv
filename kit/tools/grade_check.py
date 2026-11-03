@@ -5,7 +5,8 @@
 用法（在项目根目录）：python tools/grade_check.py [成片或检查小样.mp4]
 读：data/lines.json 的 parts（段落表，song_structure.py 产出）、plan.json（voxel-mv：start、grade、grade_why、cuts、incamera、handoffs）、
     out/page_meta.json 的 TRANSITIONS 和 ACTIONS.json 的 grade_why（song-mv）。
-写：out/grade_check.md。稳妥模式有 FAIL 退出码 1；MODE 是 free 时只报告，退出码 0。
+写：out/grade_check.md，结构化结果 → out/grade_check.json（report.py 汇总）。
+L1–L6 全部是警告档（只报告不拦，退出码恒 0）；--json 只写结构化结果，markdown 照写。
 
 不量画面就能查的（plan.json 里有 grade 才查，voxel-mv）：
   L1 段落有调色关键帧   第二段起每个段落开头 ±1 拍内有一个 grade 关键帧（或者落在某个关键帧的过渡里）；第一段开头前后 1 拍内也要有一个
@@ -19,6 +20,8 @@
 这一条就不拦，原因写进报告。歌没有段落表（data/lines.json 没 parts）时只查 L2。"""
 import json, os, subprocess, sys
 import numpy as np
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import checks_common as CC
 if hasattr(sys.stdout, 'reconfigure'): sys.stdout.reconfigure(encoding='utf-8', errors='replace'); sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 
 FPS, STEP = 24, 6
@@ -28,7 +31,15 @@ RANGES = {'exp': (0.35, 1.8), 'con': (0.6, 1.6), 'sat': (0, 2), 'temp': (-2, 2),
 CN = {'intro': '前奏', 'verse': '主歌', 'pre-chorus': '导歌', 'chorus': '副歌', 'interlude': '间奏', 'bridge': '桥段', 'outro': '尾奏', 'build': '蓄力', 'drop': '炸点'}
 
 ROOT = os.getcwd()
-VID = sys.argv[1] if len(sys.argv) > 1 else None
+if __name__ == '__main__':
+    import argparse
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument('video', nargs='?', help='成片或检查小样.mp4（不给就只查 plan 层的 L1/L2）')
+    ap.add_argument('--json', action='store_true', help='只把结构化结果写进 out/grade_check.json（markdown 报告照写）')
+    _a = ap.parse_args()
+    VID, VID_JSON = _a.video, _a.json
+else:
+    VID, VID_JSON = None, True
 load = lambda p, d=None: json.load(open(os.path.join(ROOT, p), encoding='utf-8')) if os.path.exists(os.path.join(ROOT, p)) else d
 plan = load('plan.json', {}) or {}
 lines = load('data/lines.json', {}) or {}
@@ -119,10 +130,28 @@ if VID and parts:
 elif not VID: rep.append('- 没给成片：L3–L6 不量')
 
 ok = not fails
-out = [f"# 调色关（grade check）\n\nmode: **{'safe（有 FAIL 就拦）' if MODE != 'free' else 'free（只报告）'}**\n"]
+out = [f"# 调色关（grade check）\n\nmode: **{MODE}**（本关全警告档，只报告）\n"]
 if rows: out += ['## 每段的色调（中位数；亮度 0–1、饱和 = 每像素 max−min、冷暖 = R−B，正数偏暖）', '', '| 段 | 段落 | 时间 | 亮度 | 最亮5% | 饱和 | 冷暖 |', '|---|---|---|---|---|---|---|'] + rows + ['']
-out += ['## 明细', ''] + rep + ['', '## 关', ''] + ([f'- {f}' for f in fails] or ['- L1–L6 全部通过']) + ['', f"**{'PASS' if ok else 'FAIL'}**"]
+out += ['## 明细', ''] + rep
+by = {}
+for f in fails:
+    rid, rest = f.split()[0], f.split(None, 1)[1] if len(f.split()) > 1 else ''
+    by.setdefault(rid, []).append(rest)
+NAMES = {'L1': '段落有调色关键帧', 'L2': '参数在范围内', 'L3': '有起伏', 'L4': '副歌放开', 'L5': '桥段有反差', 'L6': '暗也看得清'}
+SKIP = {'L1': '没查（plan.json 里没有 grade）', 'L3': '没量（没给成片）', 'L4': '没量（没给成片）', 'L5': '没量（没给成片）', 'L6': '没量（没给成片）'}
+RULES = []
+for rid in ('L1', 'L2', 'L3', 'L4', 'L5', 'L6'):
+    lines = [x[2:].strip() for x in rep if x.startswith('- ' + rid)]
+    dflt = SKIP.get(rid, '通过') if not lines else '；'.join(lines)[:300]
+    RULES.append({'rule': rid, 'name': NAMES[rid], 'ok': not by.get(rid), 'detail': '；'.join(by.get(rid, [])) or dflt})
+for r in RULES: r.setdefault('tier', CC.tier(r['rule']))
+out += ['', '## 关', '', '| 关 | 结果 | 说明 |', '|---|---|---|']
+out += ['| %s %s | %s | %s |' % (r['rule'], r['name'], ('**FAIL·%s**' % CC.CN[r['tier']]) if not r['ok'] else 'PASS', r['detail'][:200]) for r in RULES]
+out += ['', f"**{'PASS' if ok else 'FAIL（警告档，不拦）'}**"]
 os.makedirs(os.path.join(ROOT, 'out'), exist_ok=True)
 open(os.path.join(ROOT, 'out/grade_check.md'), 'w', encoding='utf-8').write('\n'.join(out) + '\n')
-print('\n'.join(out[-(len(fails) + 3):])); print('-> out/grade_check.md')
-sys.exit(1 if fails and MODE != 'free' else 0)
+p = CC.dump_json('grade_check', RULES, os.path.join(ROOT, 'out'))
+if __name__ == '__main__' and not VID_JSON:
+    print('\n'.join(f"| {r['rule']} | {'PASS' if r['ok'] else 'FAIL·' + CC.CN[r['tier']]} | {r['detail'][:120]} |" for r in RULES))
+    print(f"-> out/grade_check.md, {p}  {'PASS' if ok else 'FAIL（警告档，不拦）'}")
+sys.exit(CC.exit_code(RULES))
