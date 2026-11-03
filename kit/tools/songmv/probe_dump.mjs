@@ -2,10 +2,10 @@
 //   out/page_meta.json : { TRANSITIONS }            (always)
 //   out/probe.json     : window.probe(t) per frame   (unless --meta-only)
 // usage: node probe_dump.mjs <lemo-opuscar dir> <project dir> [fps=24] [--meta-only]
-import fs from 'fs'; import path from 'path';
+import fs from 'fs'; import path from 'path'; import { pathToFileURL } from 'url';
 const args = process.argv.slice(2), metaOnly = args.includes('--meta-only');
 const [lib, dir, fpsArg] = args.filter(a => a !== '--meta-only'), FPS = +(fpsArg || 24);
-const { openDemo, closeServer } = await import(path.join(path.resolve(lib), 'core/render/page.mjs'));
+const { openDemo, closeServer } = await import(pathToFileURL(path.join(path.resolve(lib), 'core/render/page.mjs')).href);
 const { browser, page } = await openDemo(dir, { w: 640, h: 360, q: 'export=1' });   // small window: only the numbers matter
 const done = async code => { await browser.close(); closeServer(); process.exit(code); };
 fs.mkdirSync(path.join(dir, 'out'), { recursive: true });

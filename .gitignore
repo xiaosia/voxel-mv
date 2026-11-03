@@ -4,3 +4,4 @@ __pycache__/
 examples/yuai/project/out/
 examples/yuai/project/data/song.wav
 examples/yuai/project/assets/*/frames/
+models/

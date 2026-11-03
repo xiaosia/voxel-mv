@@ -41,7 +41,7 @@ def frame(k):
     """本段第 k 帧（从 0 数，负数从末尾数）→ RGB uint8 1920×1080×3"""
     k = k % N
     if k not in _cache:
-        raw = subprocess.run(['ffmpeg', '-v', 'error', '-i', A.video, '-vf', f'select=eq(n\\,{k})', '-vsync', '0', '-frames:v', '1',
+        raw = subprocess.run(['ffmpeg', '-v', 'error', '-i', A.video, '-vf', f'select=eq(n\\,{k})', '-fps_mode', 'passthrough', '-frames:v', '1',
                               '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'], capture_output=True, check=True).stdout
         _cache[k] = np.frombuffer(raw, np.uint8).reshape(1080, 1920, 3)
     return _cache[k]

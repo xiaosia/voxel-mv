@@ -157,6 +157,8 @@ examples/S1_相遇/                《把回忆拼好给你》第 1 段（Claude
 
 自动找的歌词（原始文件 `data/analysis/lyrics.lrc`，项目字幕源是 `data/lyrics.lrc`）：网上查到的可能是别的版本，识别出来的会有错字。写 TREATMENT 前对着歌听开头几句，不对就改 `data/lyrics.lrc`，再用 `--lrc data/lyrics.lrc` 重建项目（重建不会覆盖 `plan.json`、`shots.js`、`index.html`）；告诉用户歌词是自动找的。
 
+识别用的 whisper 模型下不动（国内网络、huggingface_hub 半路断）：`python $SKILL/scripts/fetch_ct2_model.py small`（或 `medium` / `large-v3`），走 hf-mirror、能续传，下到技能目录 `models/`，`fetch_lyrics.py` 会自动用。别处的模型目录用 `VOXEL_ASR_MODEL` 指定；设备默认 auto（有 N 卡就用），要强制用 `VOXEL_ASR_DEVICE=cpu|cuda`。
+
 自动分析的节拍：拍点一般很准；段落和 drop 是估计，写 TREATMENT 时用耳朵核对。速度差一倍（报告里 BPM 明显不对）就 `python $SKILL/scripts/analyze_audio.py song.mp3 --bpm 大概的值 --out 项目/data/analysis` 重分析，再用 `--timeline` 重建项目。
 
 ```bash
