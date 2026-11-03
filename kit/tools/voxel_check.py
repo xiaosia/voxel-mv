@@ -129,7 +129,7 @@ if VID:
     for k in V.get('TRANSITIONS', []):
         if k.get('kind') in ('flash', 'iris', 'cut', 'dissolve', 'other') or str(k.get('to', '')).startswith('T') or str(k.get('from', '')).startswith('T'):
             allowed |= set(range(int(k['t0'] * FPS) - 2, int(k['t1'] * FPS) + 3))
-    raw = subprocess.run(['ffmpeg', '-v', 'error', '-i', VID, '-vf', 'select=not(mod(n\\,6)),scale=480:270', '-vsync', '0', '-f', 'rawvideo', '-pix_fmt', 'gray', '-'],
+    raw = subprocess.run(['ffmpeg', '-v', 'error', '-i', VID, '-vf', 'select=not(mod(n\\,6)),scale=480:270', '-fps_mode', 'passthrough', '-f', 'rawvideo', '-pix_fmt', 'gray', '-'],
                          capture_output=True, check=True).stdout
     g = np.frombuffer(raw, np.uint8).reshape(-1, 270, 480)
     dark = [i * 6 for i in range(len(g)) if (g[i] < 8).mean() > 0.01 and i * 6 not in allowed]
