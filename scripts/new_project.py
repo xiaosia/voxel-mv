@@ -6,6 +6,7 @@
   --lrc      歌词；不给就用 scripts/fetch_lyrics.py 自动找（联网查 lrclib → 本地语音识别 → 都没有就不做字幕）。
              --title / --artist 帮它找对歌；--no-lyrics 不找、不要字幕
   --timeline 节奏分析结果；不给就自动用 scripts/analyze_audio.py 分析音频（只要 numpy 和 ffmpeg）
+  --structure 人工校对过的段落表（structure.json，全曲时间）；不给就用 scripts/song_structure.py 按歌词重复、能量、旋律自动识别
   --cast     用哪些角色，名字是角色目录下的文件夹名（默认在 $SKILL/characters/ 里找）
   --lead     主角（默认 cast 的第一个）
   --seconds  只做多少秒（试做、测试用；默认到歌尾）
@@ -19,7 +20,7 @@ HERE = os.path.dirname(os.path.abspath(__file__)); SKILL = os.path.dirname(HERE)
 ap = argparse.ArgumentParser(); ap.add_argument('project')
 ap.add_argument('--audio', required=True); ap.add_argument('--timeline')
 ap.add_argument('--lrc'); ap.add_argument('--report'); ap.add_argument('--no-lyrics', action='store_true')
-ap.add_argument('--title'); ap.add_argument('--artist')
+ap.add_argument('--title'); ap.add_argument('--artist'); ap.add_argument('--structure')
 ap.add_argument('--cast', required=True); ap.add_argument('--lead'); ap.add_argument('--name', default='MV')
 ap.add_argument('--chars', default=os.path.join(SKILL, 'characters')); ap.add_argument('--seconds', type=float)
 ap.add_argument('--from', dest='frm', type=float, default=0.0)
@@ -101,6 +102,26 @@ if A.lrc:
     open(os.path.join(D, 'lyrics.lrc'), 'w', encoding='utf-8').write('\n'.join(keep) + '\n')
 elif not os.path.exists(os.path.join(D, 'lyrics.lrc')): open(os.path.join(D, 'lyrics.lrc'), 'w', encoding='utf-8').write('[00:00.00]♪\n')
 if A.report and os.path.abspath(A.report) != os.path.abspath(os.path.join(D, 'audio.report.md')): shutil.copy(A.report, os.path.join(D, 'audio.report.md'))
+# ---------- 段落表（前奏 / 主歌 / 导歌 / 副歌 / 间奏 / 桥段 / 尾奏）：按全曲识别，再换成本段本地时间 ----------
+an = os.path.join(D, 'analysis'); os.makedirs(an, exist_ok=True)
+if not A.structure:
+    subprocess.run([sys.executable, os.path.join(HERE, 'song_structure.py'), '--timeline', A.timeline, '--audio', A.audio, '--out', an]
+                   + (['--lyrics', A.lrc] if A.lrc else []), check=False)
+    A.structure = os.path.join(an, 'structure.json')
+elif os.path.abspath(A.structure) != os.path.abspath(os.path.join(an, 'structure.json')): shutil.copy(A.structure, os.path.join(an, 'structure.json'))
+if os.path.exists(A.structure):
+    ST = json.load(open(A.structure, encoding='utf-8'))
+    parts = []
+    for p in ST.get('parts', []):
+        a, b = max(p['t0'], OFF), min(p['t1'], OFF + dur)
+        if b - a < 0.05: continue
+        q = dict(p, t0=round(a - OFF, 3), t1=round(b - OFF, 3))
+        if q.get('vocal_t0') is not None: q['vocal_t0'] = round(q['vocal_t0'] - OFF, 3)
+        q['cut'] = p['t0'] < OFF - 0.05 or p['t1'] > OFF + dur + 0.05      # 只截到这一段的一部分
+        parts.append(q)
+    ST['parts'] = parts; ST['duration'] = dur; ST['offset'] = OFF
+    json.dump(ST, open(os.path.join(D, 'structure.json'), 'w', encoding='utf-8'), ensure_ascii=False, indent=1)
+    if os.path.exists(os.path.join(an, 'structure.md')): shutil.copy(os.path.join(an, 'structure.md'), os.path.join(D, 'structure.md'))
 subprocess.run([sys.executable, os.path.join(P, 'tools/songmv/make_data.py'), P], check=True)
 lines = json.load(open(os.path.join(D, 'lines.json'), encoding='utf-8'))['lines']
 lyr = [{'t0': round(l['t'] + OFF, 3), 't1': round(min(l['end'], l['t'] + 6.5) + OFF, 3), 'text': l['text']} for l in lines if not l['text'].startswith('♪') and l['t'] < dur]   # 字幕用全曲时间
@@ -129,7 +150,7 @@ pp = os.path.join(P, 'plan.json')
 if not os.path.exists(pp):
     plan = {'segment': 'MV', 'maker': A.name, 'lead': A.lead or cast[0], 'start': round(OFF * 24), 'end': round(OFF * 24) + round(dur * 24),
             'tempo': {'beat0': round(beat0, 4), 'spb': round(spb, 4)}, 'cast': cast,
-            'scenes': [], 'shots': [], 'cuts': [], 'incamera': [], 'handoffs': [], 'emotes': [],
+            'scenes': [], 'shots': [], 'cuts': [], 'incamera': [], 'handoffs': [], 'emotes': [], 'events': [],
             'tracks': {c: [] for c in cast}, 'extra_actions': {c: ['idle'] for c in cast},
             'sizes': {}, 'occlude': [], 'treadmill': []}
     json.dump(plan, open(pp, 'w', encoding='utf-8'), ensure_ascii=False, indent=1)
@@ -140,4 +161,16 @@ if not A.seconds and not OFF:
     full = TL['duration']; secs = TL.get('sections', [])
     print(f'这首歌 {full / 60:.0f} 分 {full % 60:02.0f} 秒，{len(secs) + 1} 个段落（分界在 ' + '、'.join(f'{s if isinstance(s, (int, float)) else s.get("time", 0):.1f}' for s in secs) + ' 秒）。'
           '整首做成一个项目还是拆成几段，由你判断，见 SKILL.md「先决定：一个项目还是分段」。')
+sung = [l for l in lines if not l['text'].startswith('♪')]
+intro = sung[0]['t'] if sung else dur
+if intro > 8:
+    inner = [s if isinstance(s, (int, float)) else s.get('time', 0) for s in TL.get('sections', [])]
+    inner = [s for s in inner if 2 < s < intro - 2]          # TL 这时已经是本段本地时间
+    print(f'注意：{"本段" if OFF or A.seconds else "这首歌"}' + (f'前奏 {intro:.1f} 秒（占 {intro / dur:.0%}）' if sung else '没有歌词，全段都是器乐') +
+          ('，里面的分界在 ' + '、'.join(f'{s:.1f}' for s in inner) + ' 秒' if inner else '') +
+          '。前奏是钩子不是空白：按 SKILL.md「前奏是钩子」规划，♪ 行和歌词行一样排动作，写完跑 python tools/run.py hook。')
+if os.path.exists(os.path.join(D, 'structure.json')):
+    ST = json.load(open(os.path.join(D, 'structure.json'), encoding='utf-8'))
+    print(('本段' if OFF or A.seconds else '这首歌') + '的段落：' + ' → '.join(p['name'] for p in ST['parts']) +
+          ('（已人工校对）' if ST.get('checked') else '（自动识别，看 data/structure.md 核对；改 data/analysis/structure.json 后标 checked、用 --structure 重建）'))
 print('下一步：cd 进项目，python tools/run.py doctor，再 python tools/run.py still 1 5 看占位画面能不能出图。')

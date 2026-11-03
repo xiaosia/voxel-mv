@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""voxel-mv 一条命令跑完：预检（动作关、转场登记、体素关、场景关，不出图）→ 按场景分块渲染 → 不定格 → 各关量成片 →（分段时）交接检查 → 打包交付。
+"""voxel-mv 一条命令跑完：预检（动作关、转场登记、体素关、场景关、钩子关，不出图）→ 按场景分块渲染 → 不定格 → 各关量成片 →（分段时）交接检查 → 打包交付。
 Windows、macOS、Linux 都一样用。
 在项目根目录（有 index.html 和 plan.json 的那层）运行：
   python tools/run.py doctor             检查环境（node、ffmpeg、Chrome、Python 包、浏览器有没有用上显卡），第一次会自动装渲染用的 node 依赖
@@ -11,6 +11,7 @@ Windows、macOS、Linux 都一样用。
   python tools/run.py trans              转场表检查 → out/trans_check.md
   python tools/run.py voxel              体素关（等高、贴地、不打滑、不发糊、坏帧、移轴、表情卡拍）→ out/voxel_check.md
   python tools/run.py scenes             场景关（场景表完整、每个场景 10–20 秒左右、相邻场景看得出换了、换场景有转场）→ out/scene_check.md
+  python tools/run.py hook               钩子关（开场 5 秒、没词长段每 4 小节、人声进来那一拍、副歌 / 间奏 / 桥段开头都有事件）→ out/hook_check.md
   python tools/run.py video              全流程：预检 → 渲染 → 全部检查 + 接触表、逐句帧条 → 打包到 out/交付/（不过关会停下并说明原因）
   python tools/run.py video --redo C,D   只重渲这几个场景（plan.json scenes 的 id，或者秒数范围 12-30），其余场景用上次渲好的，再跑全部检查
   python tools/run.py draft              草稿：每秒 12 帧、不跑检查，快速出 out/draft.mp4 看整体节奏（交付必须用 video）
@@ -151,6 +152,9 @@ def scenes(video='latest'):
     if video == 'latest': video = latest_video()
     return sh([PY, os.path.join(TOOLS, 'scene_check.py')] + ([video] if video else []), cwd=ROOT, check=False).returncode == 0
 
+def hook():
+    return sh([PY, os.path.join(TOOLS, 'hook_check.py'), ROOT], cwd=ROOT, check=False).returncode == 0
+
 def style(times):
     still(times, prefix='s_')
     sh([PY, os.path.join(TOOLS, 'style_compare.py')] + [os.path.join(OUT, 'chk', f's_{float(t):.4f}.jpg') for t in times], cwd=ROOT, check=False)
@@ -189,9 +193,10 @@ def render_chunks(chunks, todo, fps, cdir):
     return joined
 
 def precheck():
-    """不出图就能查的关先查：动作关、转场登记、体素关（不量画面的部分）、场景关（不量画面的部分）。"""
+    """不出图就能查的关先查：动作关、转场登记、体素关（不量画面的部分）、场景关（不量画面的部分）、钩子关。"""
     res = [('动作关', timed('预检 · 动作关', act)), ('转场关', timed('预检 · 转场登记', trans, None)),
-           ('体素关', timed('预检 · 体素关', voxel, None)), ('场景关', timed('预检 · 场景关', scenes, None))]
+           ('体素关', timed('预检 · 体素关', voxel, None)), ('场景关', timed('预检 · 场景关', scenes, None)),
+           ('钩子关', timed('预检 · 钩子关', hook))]
     print('\n预检：' + '  '.join(f'{"PASS" if g else "FAIL"} {n}' for n, g in res))
     return res
 
@@ -225,10 +230,10 @@ def video(redo=None):
     ok_trn = timed('转场关（量成片）', trans, proxy, False)
     ok_vox = timed('体素关（量成片）', voxel, proxy, False)
     ok_scn = timed('场景关（量成片）', scenes, proxy)
-    gates = [('不定格', 'FROZEN' not in fz), ('动作关', ok_act), ('转场关', ok_trn), ('体素关', ok_vox), ('场景关', ok_scn)]
+    gates = [('不定格', 'FROZEN' not in fz), ('动作关', ok_act), ('转场关', ok_trn), ('体素关', ok_vox), ('场景关', ok_scn), ('钩子关', dict(pre)['钩子关'])]
     if RELAY:
         gates.append(('交接检查', timed('交接检查', sh, [PY, os.path.join(TOOLS, 'handoff_check.py'), '--segment', SEG, '--video', film, '--project', ROOT], check=False).returncode == 0))
-    for f in ('act_check.md', 'act_check.png', 'trans_check.md', 'check.md', 'voxel_check.md', 'scene_check.md'):
+    for f in ('act_check.md', 'act_check.png', 'trans_check.md', 'check.md', 'voxel_check.md', 'scene_check.md', 'hook_check.md'):
         if os.path.exists(os.path.join(OUT, f)): shutil.copy(os.path.join(OUT, f), os.path.join(OUT, 'checks', f))
     if SAFE is False: gates = [(n, g or n != '不定格') for n, g in gates]   # 自由模式：只有不定格拦
     print('\n' + '\n'.join(f'  {"PASS" if g else "FAIL"}  {n}' for n, g in gates))
@@ -287,6 +292,7 @@ if __name__ == '__main__':
     elif m == 'act': sys.exit(0 if act() else 1)
     elif m == 'voxel': sys.exit(0 if voxel() else 1)
     elif m == 'scenes': sys.exit(0 if scenes() else 1)
+    elif m == 'hook': sys.exit(0 if hook() else 1)
     elif m == 'style': style(rest or ['2', '10', '20'])
     elif m == 'actions': sh([PY, os.path.join(TOOLS, 'make_actions.py')], cwd=ROOT)
     elif m == 'trans': sys.exit(0 if trans() else 1)
