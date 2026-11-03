@@ -11,6 +11,7 @@
   V4 不发糊            角色在画面里的像素高 ≤ 素材站立像素高 × 1.5（连续超过 6 帧才算；1.2–1.5 倍只提示；交接窗口不算）
   V5 不用坏帧          frames.json 的 bad 里列的帧一次都不出现
   V6 微缩质感          非特写帧里 ≥ 70% 开着移轴（band ≤ 0.35）；成片里近黑像素（亮度 < 8）> 1% 的帧只能出现在登记过的转场、交接和片头片尾 1.5 秒里
+                       （plan.json 的 grade 里标了 dark: true 的段落放宽到 8%）
   V7 表情卡拍          plan.json 的每个表情符号弹出帧离最近的拍点 ≤ 1 帧
 另外报告（不拦）：每个镜头的可见方块数（场景细节）、角色景别分布。"""
 import json, os, subprocess, sys
@@ -132,8 +133,12 @@ if VID:
     raw = subprocess.run(['ffmpeg', '-v', 'error', '-i', VID, '-vf', 'select=not(mod(n\\,6)),scale=480:270', '-fps_mode', 'passthrough', '-f', 'rawvideo', '-pix_fmt', 'gray', '-'],
                          capture_output=True, check=True).stdout
     g = np.frombuffer(raw, np.uint8).reshape(-1, 270, 480)
-    dark = [i * 6 for i in range(len(g)) if (g[i] < 8).mean() > 0.01 and i * 6 not in allowed]
-    if dark: ok6 = False; msg6.append(f'有 {len(dark)} 个取样帧近黑像素 > 1%（本段帧号 {fmt(spans(dark, 6))}）：阴影太黑、天空太暗或者场景有洞，补环境光')
+    # 调色关键帧写了 dark: true 的段落（夜景、桥段压暗）近黑像素放宽到 8%：暗是故意的，但不能大片死黑
+    gk = sorted(plan.get('grade') or [], key=lambda k: k['f']); darkf = set()
+    for k, nx in zip(gk, gk[1:] + [{'f': plan['end']}]):
+        if k.get('dark'): darkf |= set(range(k['f'] - START, nx['f'] - START))
+    dark = [i * 6 for i in range(len(g)) if (g[i] < 8).mean() > (0.08 if i * 6 in darkf else 0.01) and i * 6 not in allowed]
+    if dark: ok6 = False; msg6.append(f'有 {len(dark)} 个取样帧近黑像素 > 1%（本段帧号 {fmt(spans(dark, 6))}）：阴影太黑、天空太暗或者场景有洞，补环境光；故意压暗的段落在 grade 关键帧上标 dark: true')
     else: msg6.append('没有死黑')
 else: msg6.append('（没给成片，近黑像素没量）')
 res('V6 微缩质感', ok6, '；'.join(msg6))

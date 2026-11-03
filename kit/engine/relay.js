@@ -434,13 +434,16 @@ const tCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
 const tScene = new THREE.Scene(); tScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), tMat));
 
 // 微缩后期（每帧）：拷贝帧缓冲再处理，不经过 render target，角色贴图不会被色调映射两次。
-// 移轴模糊（focus 焦点高度、band 清晰带宽）、亮部泛光、暗角；hblur 横向动态模糊（像素，甩镜交接用）
+// 移轴模糊（focus 焦点高度、band 清晰带宽）、亮部泛光、调色（见下面 GRADE）、暗角；hblur 横向动态模糊（像素，甩镜交接用）
 const fbTex = new THREE.FramebufferTexture(1920, 1080), fbPos = new THREE.Vector2(0, 0);
 const pMat = new THREE.ShaderMaterial({
-  uniforms: { tP: { value: fbTex }, focus: { value: 0.5 }, band: { value: 0.22 }, hblur: { value: 0 } },
+  uniforms: { tP: { value: fbTex }, focus: { value: 0.5 }, band: { value: 0.22 }, hblur: { value: 0 },
+    gExp: { value: 1 }, gCon: { value: 1 }, gSat: { value: 1 }, gTemp: { value: 0 }, gTint: { value: 0 },
+    gSh: { value: new THREE.Vector3(0.5, 0.5, 0.5) }, gShA: { value: 0 }, gHi: { value: new THREE.Vector3(0.5, 0.5, 0.5) }, gHiA: { value: 0 }, gVig: { value: 0.28 } },
   vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`,
   fragmentShader: `
     uniform sampler2D tP; uniform float focus, band, hblur; varying vec2 vUv;
+    uniform float gExp, gCon, gSat, gTemp, gTint, gShA, gHiA, gVig; uniform vec3 gSh, gHi;
     void main(){
       vec2 px = vec2(1.0 / 1920.0, 1.0 / 1080.0);
       vec3 c;
@@ -460,12 +463,57 @@ const pMat = new THREE.ShaderMaterial({
       }
       vec3 col = acc / n;
       col += max(col - 0.85, 0.0) * 0.35;
-      vec2 q = vUv - 0.5; col *= 1.0 - 0.28 * smoothstep(0.35, 0.85, length(q * vec2(1.25, 1.0)));
+      // 调色：曝光 → 冷暖 / 偏绿偏品红 → 暗部、亮部染色 → 对比 → 饱和（全中性时等于没调）
+      col *= gExp;
+      col *= vec3(1.0 + 0.08 * gTemp - 0.02 * gTint, 1.0 + 0.04 * gTint, 1.0 - 0.08 * gTemp - 0.02 * gTint);
+      float lu = dot(col, vec3(0.2126, 0.7152, 0.0722));
+      col += (gSh - 0.5) * gShA * (1.0 - smoothstep(0.0, 0.6, lu));
+      col += (gHi - 0.5) * gHiA * smoothstep(0.4, 1.0, lu);
+      col = (col - 0.5) * gCon + 0.5;
+      lu = dot(col, vec3(0.2126, 0.7152, 0.0722));
+      col = max(mix(vec3(lu), col, gSat), 0.0);
+      vec2 q = vUv - 0.5; col *= 1.0 - gVig * smoothstep(0.35, 0.85, length(q * vec2(1.25, 1.0)));
       gl_FragColor = vec4(col, 1.0);
     }`,
   depthTest: false, depthWrite: false, toneMapped: false,
 });
 const pScene = new THREE.Scene(); pScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), pMat));
+
+// ---------- 调色（GRADE）：按段落 / 场景变的色调，角色和场景一起调，字幕不受影响 ----------
+// plan.json 的 grade：[{f, exp, con, sat, temp, tint, shadow, shadowAmt, hi, hiAmt, vig, ease, dark, why}]，f 是全曲帧号。
+// 从 f 开始用 ease 帧（默认 0：在这一帧直接切，适合放在转场关键帧上）从上一个关键帧过渡过来；没写的参数是中性值。
+// setupShot 返回的 grade（同样的字段）叠加在上面，做一闪、渐暗之类的镜头内变化：exp/con/sat 相乘，temp/tint 相加，其余覆盖。
+export const GRADE0 = { exp: 1, con: 1, sat: 1, temp: 0, tint: 0, shadow: '#808080', shadowAmt: 0, hi: '#808080', hiAmt: 0, vig: 0.28 };
+const _gc = new THREE.Color(), _gc2 = new THREE.Color();
+function gradeKeys() { return (PLAN.grade || []).slice().sort((a, b) => a.f - b.f); }
+function lerpGrade(a, b, k) {
+  const o = {};
+  for (const n of Object.keys(GRADE0)) {
+    if (n === 'shadow' || n === 'hi') { _gc.set(a[n]); _gc2.set(b[n]); o[n] = '#' + _gc.lerp(_gc2, k).getHexString(); }
+    else o[n] = a[n] + (b[n] - a[n]) * k;
+  }
+  return o;
+}
+export function gradeAt(f) {
+  const keys = gradeKeys(); let cur = { ...GRADE0 };
+  for (const g of keys) {
+    if (f < g.f) break;
+    const tgt = { ...GRADE0, ...g }, e = g.ease || 0;
+    cur = e > 0 && f < g.f + e ? lerpGrade(cur, tgt, easeIO((f - g.f + 1) / e)) : tgt;
+  }
+  return cur;
+}
+function applyGrade(f, extra) {
+  const g = gradeAt(f);
+  if (extra) for (const [n, v] of Object.entries(extra)) {
+    if (n === 'exp' || n === 'con' || n === 'sat') g[n] *= v; else if (n === 'temp' || n === 'tint') g[n] += v; else if (n in GRADE0) g[n] = v;
+  }
+  const u = pMat.uniforms;
+  u.gExp.value = g.exp; u.gCon.value = g.con; u.gSat.value = g.sat; u.gTemp.value = g.temp; u.gTint.value = g.tint;
+  _gc.set(g.shadow); u.gSh.value.set(_gc.r, _gc.g, _gc.b); u.gShA.value = g.shadowAmt;
+  _gc.set(g.hi); u.gHi.value.set(_gc.r, _gc.g, _gc.b); u.gHiA.value = g.hiAmt; u.gVig.value = g.vig;
+  return g;
+}
 
 // =====================================================================
 // 表情符号：代码拼的方块符号，挂在角色头顶，大小跟头走，在拍上弹出、随拍轻跳
@@ -649,7 +697,7 @@ function screenPoints() {
 
 // =====================================================================
 // 主循环：段落注册 SEG，引擎负责转场、后期、表情、字幕和页面契约
-// SEG = { build(), setupShot(f, sf) → { veilColor, veilOp, focus, band, hblur, hideCaption }, overlay(f) }
+// SEG = { build(), setupShot(f, sf) → { veilColor, veilOp, focus, band, hblur, hideCaption, grade }, overlay(f) }
 // =====================================================================
 let SEG = null, CUTS = [], HAS_T2 = false, LASTV = {};
 function cutAt(f) { return CUTS.find(k => f >= k.c - k.len / 2 && f < k.c + k.len / 2); }
@@ -679,6 +727,7 @@ function render(f) {
     v = f < cut.c ? vA : vB;
   }
   pMat.uniforms.focus.value = v.focus ?? 0.5; pMat.uniforms.band.value = v.band ?? 0.22; pMat.uniforms.hblur.value = v.hblur ?? 0;
+  applyGrade(f, v.grade);
   renderer.copyFramebufferToTexture(fbPos, fbTex); renderer.render(pScene, tCam);
   veil.style.background = v.veilColor || '#000'; veil.style.opacity = v.veilOp || 0;
   fxc.clearRect(0, 0, 1920, 1080);
